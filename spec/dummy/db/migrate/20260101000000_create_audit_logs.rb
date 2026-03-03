@@ -1,0 +1,30 @@
+class CreateAuditLogs < ActiveRecord::Migration[8.1]
+  def change
+    create_table :audit_logs, id: :uuid do |t|
+      t.string :actor_gid
+      t.string :actor_type
+      t.string :target_gid
+      t.string :target_type
+      t.string :scope_gid
+      t.string :scope_type
+      t.string :event_type, null: false
+      t.string :request_id
+      t.string :ip_address
+      t.string :user_agent
+      t.string :session_id
+      t.json :metadata, default: {}
+      t.datetime :occurred_at, null: false
+      t.timestamps
+    end
+
+    add_index :audit_logs, :event_type
+    add_index :audit_logs, :actor_type
+    add_index :audit_logs, :target_type
+    add_index :audit_logs, [:scope_type, :scope_gid]
+    add_index :audit_logs, :scope_type
+    add_index :audit_logs, :request_id
+    add_index :audit_logs, :occurred_at
+    add_index :audit_logs, :ip_address
+    add_index :audit_logs, :session_id
+  end
+end

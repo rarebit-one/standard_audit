@@ -1,0 +1,37 @@
+StandardAudit.configure do |config|
+  # Subscribe to ActiveSupport::Notifications patterns
+  # config.subscribe_to "audit.**"
+
+  # Actor extractor from notification payload
+  # config.actor_extractor = ->(payload) { payload[:actor] }
+
+  # Target extractor from notification payload
+  # config.target_extractor = ->(payload) { payload[:target] }
+
+  # Scope extractor from notification payload
+  # config.scope_extractor = ->(payload) { payload[:scope] }
+
+  # Fallback resolvers (used when payload values are nil)
+  # config.current_actor_resolver = -> { Current.user }
+  # config.current_request_id_resolver = -> { Current.request_id }
+  # config.current_ip_address_resolver = -> { Current.ip_address }
+  # config.current_user_agent_resolver = -> { Current.user_agent }
+  # config.current_session_id_resolver = -> { Current.session_id }
+
+  # Keys to strip from metadata
+  # config.sensitive_keys = %i[password password_confirmation token secret]
+
+  # Run audit log creation in background job
+  # config.async = false
+  # config.queue_name = :default
+
+  # Enable/disable audit logging
+  # config.enabled = true
+
+  # GDPR: metadata keys to strip on anonymization
+  # config.anonymizable_metadata_keys = %i[email name ip_address]
+
+  # Data retention
+  # config.retention_days = nil
+  # config.auto_cleanup = false
+end

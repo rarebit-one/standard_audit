@@ -5,17 +5,13 @@ abort("The Rails environment is running in production mode!") if Rails.env.produ
 require "rspec/rails"
 require "shoulda/matchers"
 
-Rails.root.glob("../../spec/support/**/*.rb").sort.each { |f| require f }
-
-begin
-  ActiveRecord::Migration.maintain_test_schema!
-rescue ActiveRecord::PendingMigrationError => e
-  abort e.to_s.strip
-end
+# For in-memory SQLite, run migrations directly
+ActiveRecord::MigrationContext.new(Rails.root.join("db/migrate")).migrate
 
 RSpec.configure do |config|
   config.use_transactional_fixtures = true
   config.filter_rails_from_backtrace!
+  config.include ActiveSupport::Testing::TimeHelpers
 end
 
 Shoulda::Matchers.configure do |config|
