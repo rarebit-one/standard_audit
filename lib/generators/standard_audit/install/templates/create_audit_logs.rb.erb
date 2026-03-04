@@ -5,6 +5,8 @@ class CreateAuditLogs < ActiveRecord::Migration[<%= ActiveRecord::Migration.curr
       t.string :actor_type
       t.string :target_gid
       t.string :target_type
+      # Multi-tenancy: include StandardAudit::AuditScope in your tenant model
+      # (e.g., Organisation) to scope audit logs. Leave nil for single-tenant apps.
       t.string :scope_gid
       t.string :scope_type
       t.string :event_type, null: false
@@ -22,7 +24,7 @@ class CreateAuditLogs < ActiveRecord::Migration[<%= ActiveRecord::Migration.curr
     add_index :audit_logs, [:target_gid, :occurred_at]
     add_index :audit_logs, [:scope_type, :scope_gid]
     add_index :audit_logs, :request_id
-    add_index :audit_logs, :occurred_at
+    add_index :audit_logs, [:occurred_at, :created_at]
     add_index :audit_logs, :session_id
   end
 end

@@ -11,6 +11,9 @@ StandardAudit.configure do |config|
   # Scope extractor from notification payload
   # config.scope_extractor = ->(payload) { payload[:scope] }
 
+  # Multi-tenancy: include StandardAudit::AuditScope in your tenant model
+  # to add a scoped_audit_logs association.
+
   # Fallback resolvers (used when payload values are nil)
   # config.current_actor_resolver = -> { Current.user }
   # config.current_request_id_resolver = -> { Current.request_id }

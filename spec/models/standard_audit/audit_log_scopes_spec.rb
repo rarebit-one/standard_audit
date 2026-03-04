@@ -209,6 +209,13 @@ RSpec.describe StandardAudit::AuditLog, "scopes", type: :model do
 
       expect(described_class.chronological.to_a).to eq([log3, log1, log2])
     end
+
+    it "breaks ties on occurred_at using created_at" do
+      log1 = create_log(occurred_at: 1.day.ago, created_at: 2.minutes.ago)
+      log2 = create_log(occurred_at: 1.day.ago, created_at: 1.minute.ago)
+
+      expect(described_class.chronological.to_a).to eq([log1, log2])
+    end
   end
 
   describe ".reverse_chronological" do
@@ -218,6 +225,13 @@ RSpec.describe StandardAudit::AuditLog, "scopes", type: :model do
       log3 = create_log(occurred_at: 3.days.ago)
 
       expect(described_class.reverse_chronological.to_a).to eq([log2, log1, log3])
+    end
+
+    it "breaks ties on occurred_at using created_at" do
+      log1 = create_log(occurred_at: 1.day.ago, created_at: 2.minutes.ago)
+      log2 = create_log(occurred_at: 1.day.ago, created_at: 1.minute.ago)
+
+      expect(described_class.reverse_chronological.to_a).to eq([log2, log1])
     end
   end
 

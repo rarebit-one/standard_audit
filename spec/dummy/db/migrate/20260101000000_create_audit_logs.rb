@@ -22,7 +22,7 @@ class CreateAuditLogs < ActiveRecord::Migration[8.1]
     add_index :audit_logs, [:target_gid, :occurred_at]
     add_index :audit_logs, [:scope_type, :scope_gid]
     add_index :audit_logs, :request_id
-    add_index :audit_logs, :occurred_at
+    add_index :audit_logs, [:occurred_at, :created_at]
     add_index :audit_logs, :session_id
   end
 end

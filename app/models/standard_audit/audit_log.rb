@@ -85,8 +85,8 @@ module StandardAudit
     scope :for_request, ->(request_id) { where(request_id: request_id) }
     scope :from_ip, ->(ip_address) { where(ip_address: ip_address) }
     scope :for_session, ->(session_id) { where(session_id: session_id) }
-    scope :chronological, -> { order(occurred_at: :asc) }
-    scope :reverse_chronological, -> { order(occurred_at: :desc) }
+    scope :chronological, -> { order(occurred_at: :asc, created_at: :asc) }
+    scope :reverse_chronological, -> { order(occurred_at: :desc, created_at: :desc) }
     scope :recent, ->(n = 10) { reverse_chronological.limit(n) }
 
     # -- GDPR methods --
