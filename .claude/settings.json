@@ -21,7 +21,11 @@
       "Bash(gem build:*)",
       "Bash(gem info:*)",
       "Bash(rm *.gem)",
-      "Skill(publish-gem)"
+      "Skill(publish-gem)",
+      "Skill(worktree)",
+      "Skill(start)",
+      "Bash(git worktree:*)",
+      "Bash(git stash:*)"
     ]
   }
 }
