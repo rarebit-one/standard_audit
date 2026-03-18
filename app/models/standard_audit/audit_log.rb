@@ -153,6 +153,7 @@ module StandardAudit
 
     def emit_created_event
       ActiveSupport::Notifications.instrument("standard_audit.audit_log.created", {
+        id: id,
         event_type: event_type,
         actor_type: actor_type,
         target_type: target_type,

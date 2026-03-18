@@ -1,12 +1,16 @@
 require "rails_helper"
 
-RSpec.describe StandardAudit::AuditLog, "notifications", type: :model do
+RSpec.describe StandardAudit::AuditLog, "ActiveSupport::Notifications integration", type: :model do
+  # after_create_commit fires in transactional tests on Rails 7.1+ due to
+  # run_commit_callbacks_on_first_saved_instances_in_transaction (default: true).
+
   it "instruments standard_audit.audit_log.created after commit" do
     events = []
     callback = lambda { |_name, _start, _finish, _id, payload| events << payload }
 
+    log = nil
     ActiveSupport::Notifications.subscribed(callback, "standard_audit.audit_log.created") do
-      StandardAudit::AuditLog.create!(
+      log = StandardAudit::AuditLog.create!(
         event_type: "test.event",
         occurred_at: Time.current,
         actor_type: "User",
@@ -17,6 +21,7 @@ RSpec.describe StandardAudit::AuditLog, "notifications", type: :model do
 
     expect(events.size).to eq(1)
     expect(events.first).to include(
+      id: log.id,
       event_type: "test.event",
       actor_type: "User",
       target_type: "Order",
