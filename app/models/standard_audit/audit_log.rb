@@ -3,7 +3,7 @@ module StandardAudit
     self.table_name = "audit_logs"
 
     before_create :assign_uuid, if: -> { id.blank? }
-    after_create :emit_created_event
+    after_create_commit :emit_created_event
 
     validates :event_type, presence: true
     validates :occurred_at, presence: true
@@ -158,8 +158,8 @@ module StandardAudit
         target_type: target_type,
         scope_type: scope_type
       })
-    rescue => e
-      Rails.logger.warn("[StandardAudit] Failed to emit event: #{e.message}")
+    rescue StandardError => e
+      Rails.logger.warn("[StandardAudit] Failed to emit event: #{e.class}: #{e.message}")
     end
 
     def assign_uuid
