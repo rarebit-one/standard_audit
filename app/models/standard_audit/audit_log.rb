@@ -7,6 +7,8 @@ module StandardAudit
 
     # Audit logs are append-only. Use update_columns for privileged
     # operations like GDPR anonymization that must bypass this guard.
+    # Note: delete/delete_all bypass callbacks and are permitted for
+    # bulk cleanup operations (see CleanupJob, rake standard_audit:cleanup).
     before_update { raise ActiveRecord::ReadOnlyRecord }
     before_destroy { raise ActiveRecord::ReadOnlyRecord }
 
