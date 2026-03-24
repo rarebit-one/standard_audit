@@ -47,6 +47,7 @@ RSpec.describe StandardAudit::Generators::InstallGenerator do
     expect(content).to include("add_index :audit_logs, [:occurred_at, :created_at]")
     expect(content).to include("t.text :user_agent")
     expect(content).to include("Multi-tenancy: include StandardAudit::AuditScope")
+    expect(content).to include("add_index :audit_logs, :metadata, using: :gin")
   end
 
   it "creates initializer file" do
