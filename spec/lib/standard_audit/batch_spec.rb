@@ -118,6 +118,19 @@ RSpec.describe "StandardAudit.batch" do
     }.to change(StandardAudit::AuditLog, :count).by(3)
   end
 
+  it "takes precedence over async mode" do
+    StandardAudit.configure { |c| c.async = true }
+
+    expect {
+      StandardAudit.batch do
+        StandardAudit.record("batch.async_test", actor: user)
+      end
+    }.to change(StandardAudit::AuditLog, :count).by(1)
+
+    # Should be inserted directly via insert_all!, not queued as a job
+    expect(StandardAudit::AuditLog.find_by(event_type: "batch.async_test")).to be_present
+  end
+
   it "filters sensitive keys in batch mode" do
     StandardAudit.batch do
       StandardAudit.record("batch.sensitive", actor: user, metadata: { action: "test", password: "secret123" })

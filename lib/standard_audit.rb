@@ -71,6 +71,8 @@ module StandardAudit
     # Buffers record calls and flushes them via insert_all! on block exit.
     # If the block raises, buffered records are dropped — only successful
     # batches are persisted. Nested batches flush independently.
+    # Block-form record calls (with AS::Notifications) bypass the buffer
+    # and are processed normally since they don't persist records directly.
     # Note: uses Thread.current for storage, which is not fiber-safe.
     # Apps using async adapters (Falcon) should avoid concurrent batches.
     def batch
