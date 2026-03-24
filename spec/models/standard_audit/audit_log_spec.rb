@@ -20,6 +20,28 @@ RSpec.describe StandardAudit::AuditLog, type: :model do
     end
   end
 
+  describe "immutability" do
+    it "prevents updates" do
+      log = StandardAudit::AuditLog.create!(event_type: "test.event", occurred_at: Time.current)
+      expect { log.update!(event_type: "test.changed") }.to raise_error(ActiveRecord::ReadOnlyRecord)
+    end
+
+    it "prevents destruction" do
+      log = StandardAudit::AuditLog.create!(event_type: "test.event", occurred_at: Time.current)
+      expect { log.destroy! }.to raise_error(ActiveRecord::ReadOnlyRecord)
+    end
+
+    it "allows GDPR anonymization via update_columns" do
+      log = StandardAudit::AuditLog.create!(
+        event_type: "test.event",
+        occurred_at: Time.current,
+        ip_address: "192.168.1.1"
+      )
+      expect { log.update_columns(ip_address: nil) }.not_to raise_error
+      expect(log.reload.ip_address).to be_nil
+    end
+  end
+
   describe "actor assignment" do
     let(:user) { User.create!(name: "Alice", email: "alice@example.com") }
 
@@ -32,7 +54,7 @@ RSpec.describe StandardAudit::AuditLog, type: :model do
     end
 
     it "retrieves actor from GlobalID" do
-      log = StandardAudit::AuditLog.create!(event_type: "test.event", occurred_at: Time.current)
+      log = StandardAudit::AuditLog.new(event_type: "test.event", occurred_at: Time.current)
       log.actor = user
       log.save!
 
@@ -50,7 +72,7 @@ RSpec.describe StandardAudit::AuditLog, type: :model do
     end
 
     it "handles deleted actor gracefully" do
-      log = StandardAudit::AuditLog.create!(event_type: "test.event", occurred_at: Time.current)
+      log = StandardAudit::AuditLog.new(event_type: "test.event", occurred_at: Time.current)
       log.actor = user
       log.save!
 
@@ -74,7 +96,7 @@ RSpec.describe StandardAudit::AuditLog, type: :model do
     end
 
     it "retrieves target from GlobalID" do
-      log = StandardAudit::AuditLog.create!(event_type: "test.event", occurred_at: Time.current)
+      log = StandardAudit::AuditLog.new(event_type: "test.event", occurred_at: Time.current)
       log.target = order
       log.save!
 
@@ -92,7 +114,7 @@ RSpec.describe StandardAudit::AuditLog, type: :model do
     end
 
     it "handles deleted target gracefully" do
-      log = StandardAudit::AuditLog.create!(event_type: "test.event", occurred_at: Time.current)
+      log = StandardAudit::AuditLog.new(event_type: "test.event", occurred_at: Time.current)
       log.target = order
       log.save!
 
@@ -115,7 +137,7 @@ RSpec.describe StandardAudit::AuditLog, type: :model do
     end
 
     it "retrieves scope from GlobalID" do
-      log = StandardAudit::AuditLog.create!(event_type: "test.event", occurred_at: Time.current)
+      log = StandardAudit::AuditLog.new(event_type: "test.event", occurred_at: Time.current)
       log.scope = org
       log.save!
 
@@ -133,7 +155,7 @@ RSpec.describe StandardAudit::AuditLog, type: :model do
     end
 
     it "handles deleted scope gracefully" do
-      log = StandardAudit::AuditLog.create!(event_type: "test.event", occurred_at: Time.current)
+      log = StandardAudit::AuditLog.new(event_type: "test.event", occurred_at: Time.current)
       log.scope = org
       log.save!
 

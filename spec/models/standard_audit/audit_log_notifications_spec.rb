@@ -29,17 +29,10 @@ RSpec.describe StandardAudit::AuditLog, "ActiveSupport::Notifications integratio
     )
   end
 
-  it "does not emit notification on update" do
+  it "raises ReadOnlyRecord on update (audit logs are immutable)" do
     log = StandardAudit::AuditLog.create!(event_type: "test.event", occurred_at: Time.current)
 
-    events = []
-    callback = lambda { |_name, _start, _finish, _id, payload| events << payload }
-
-    ActiveSupport::Notifications.subscribed(callback, "standard_audit.audit_log.created") do
-      log.update!(event_type: "test.updated")
-    end
-
-    expect(events).to be_empty
+    expect { log.update!(event_type: "test.updated") }.to raise_error(ActiveRecord::ReadOnlyRecord)
   end
 
   it "logs a warning and does not raise when instrumentation fails" do
