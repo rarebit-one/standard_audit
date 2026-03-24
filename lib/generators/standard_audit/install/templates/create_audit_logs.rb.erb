@@ -14,7 +14,7 @@ class CreateAuditLogs < ActiveRecord::Migration[<%= ActiveRecord::Migration.curr
       t.string :ip_address
       t.text :user_agent
       t.string :session_id
-      t.json :metadata, default: {}
+      t.jsonb :metadata, default: {}
       t.datetime :occurred_at, null: false
       t.timestamps
     end
@@ -26,6 +26,7 @@ class CreateAuditLogs < ActiveRecord::Migration[<%= ActiveRecord::Migration.curr
     add_index :audit_logs, :request_id
     add_index :audit_logs, [:occurred_at, :created_at]
     add_index :audit_logs, :session_id
+    # GIN index requires PostgreSQL; remove if using another database
     add_index :audit_logs, :metadata, using: :gin
   end
 end

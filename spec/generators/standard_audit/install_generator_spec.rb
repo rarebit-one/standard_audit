@@ -39,7 +39,7 @@ RSpec.describe StandardAudit::Generators::InstallGenerator do
     expect(content).to include("t.string :actor_gid")
     expect(content).to include("t.string :target_gid")
     expect(content).to include("t.string :scope_gid")
-    expect(content).to include("t.json :metadata")
+    expect(content).to include("t.jsonb :metadata")
     expect(content).to include("t.datetime :occurred_at, null: false")
     expect(content).to include("add_index :audit_logs, :event_type")
     expect(content).to include("add_index :audit_logs, [:actor_gid, :occurred_at]")
