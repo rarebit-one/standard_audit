@@ -7,7 +7,8 @@ module StandardAudit
       return unless days
 
       cutoff = days.days.ago
-      StandardAudit::AuditLog.where("occurred_at < ?", cutoff).delete_all
+      deleted = StandardAudit::AuditLog.before(cutoff).in_batches(of: 10_000).delete_all
+      Rails.logger.info("[StandardAudit] CleanupJob deleted #{deleted} audit logs older than #{days} days")
     end
   end
 end

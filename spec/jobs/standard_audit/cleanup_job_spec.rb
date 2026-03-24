@@ -39,6 +39,14 @@ RSpec.describe StandardAudit::CleanupJob, type: :job do
       expect(StandardAudit::AuditLog.exists?(log.id)).to be true
     end
 
+    it "logs the number of deleted records" do
+      StandardAudit.configure { |c| c.retention_days = 30 }
+      create_log(occurred_at: 31.days.ago)
+
+      expect(Rails.logger).to receive(:info).with(/CleanupJob deleted .* audit logs older than 30 days/)
+      described_class.new.perform
+    end
+
     it "uses configured queue name" do
       StandardAudit.configure { |c| c.queue_name = :maintenance }
 
