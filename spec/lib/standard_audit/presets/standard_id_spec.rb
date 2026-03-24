@@ -26,6 +26,8 @@ RSpec.describe StandardAudit::Presets::StandardId do
       described_class.apply(config)
 
       expect(config.subscriptions.size).to eq(7)
+      expect(config.subscriptions).to include("standard_id.session.created")
+      expect(config.subscriptions).to include(a_kind_of(Regexp))
     end
   end
 end
