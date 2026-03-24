@@ -33,10 +33,6 @@ RSpec.describe StandardAudit::Configuration do
       expect(config.retention_days).to be_nil
     end
 
-    it "defaults auto_cleanup to false" do
-      expect(config.auto_cleanup).to be false
-    end
-
     it "defaults metadata_builder to nil" do
       expect(config.metadata_builder).to be_nil
     end

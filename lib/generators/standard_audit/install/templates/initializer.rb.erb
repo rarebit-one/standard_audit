@@ -39,7 +39,6 @@ StandardAudit.configure do |config|
   # GDPR: metadata keys to strip on anonymization
   # config.anonymizable_metadata_keys = %i[email name ip_address]
 
-  # Data retention
+  # Data retention (schedule StandardAudit::CleanupJob to enforce)
   # config.retention_days = nil
-  # config.auto_cleanup = false
 end
