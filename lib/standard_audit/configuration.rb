@@ -34,7 +34,12 @@ module StandardAudit
         defined?(Current) && Current.respond_to?(:session_id) ? Current.session_id : nil
       }
 
-      @sensitive_keys = %i[password password_confirmation token secret]
+      @sensitive_keys = %i[
+        password password_confirmation token secret
+        api_key access_token refresh_token
+        private_key certificate_chain
+        ssn credit_card authorization
+      ]
       @metadata_builder = nil
       @anonymizable_metadata_keys = %i[email name ip_address]
       @retention_days = nil
