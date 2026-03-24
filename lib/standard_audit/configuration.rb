@@ -48,5 +48,17 @@ module StandardAudit
     def subscriptions
       @subscriptions.dup.freeze
     end
+
+    def use_preset(name)
+      preset = case name.to_sym
+      when :standard_id
+        require "standard_audit/presets/standard_id"
+        StandardAudit::Presets::StandardId
+      else
+        raise ArgumentError, "Unknown preset: #{name}. Available presets: :standard_id"
+      end
+
+      preset.apply(self)
+    end
   end
 end
