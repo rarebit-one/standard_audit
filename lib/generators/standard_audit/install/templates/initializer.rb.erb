@@ -1,5 +1,8 @@
 StandardAudit.configure do |config|
-  # Subscribe to ActiveSupport::Notifications patterns
+  # Use a preset to subscribe to common event patterns
+  # config.use_preset(:standard_id)
+
+  # Or subscribe to ActiveSupport::Notifications patterns manually
   # config.subscribe_to "audit.**"
 
   # Actor extractor from notification payload

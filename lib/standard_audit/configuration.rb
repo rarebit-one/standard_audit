@@ -10,6 +10,7 @@ module StandardAudit
 
     def initialize
       @subscriptions = []
+      @applied_presets = []
       @async = false
       @queue_name = :default
       @enabled = true
@@ -55,6 +56,23 @@ module StandardAudit
 
     def subscriptions
       @subscriptions.dup.freeze
+    end
+
+    def use_preset(name)
+      key = name.to_sym
+      return self if @applied_presets.include?(key)
+
+      preset = case key
+      when :standard_id
+        require "standard_audit/presets/standard_id"
+        StandardAudit::Presets::StandardId
+      else
+        raise ArgumentError, "Unknown preset: #{name}. Available presets: :standard_id"
+      end
+
+      preset.apply(self)
+      @applied_presets << key
+      self
     end
   end
 end
