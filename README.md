@@ -179,9 +179,8 @@ StandardAudit.configure do |config|
   # Metadata keys to strip during anonymization.
   config.anonymizable_metadata_keys = %i[email name ip_address]
 
-  # -- Retention --
+  # -- Retention (schedule StandardAudit::CleanupJob to enforce) --
   config.retention_days = 90
-  config.auto_cleanup = false
 end
 ```
 

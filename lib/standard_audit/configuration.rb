@@ -6,7 +6,7 @@ module StandardAudit
                   :current_ip_address_resolver, :current_user_agent_resolver,
                   :current_session_id_resolver,
                   :sensitive_keys, :metadata_builder,
-                  :anonymizable_metadata_keys, :retention_days, :auto_cleanup
+                  :anonymizable_metadata_keys, :retention_days
 
     def initialize
       @subscriptions = []
@@ -38,7 +38,6 @@ module StandardAudit
       @metadata_builder = nil
       @anonymizable_metadata_keys = %i[email name ip_address]
       @retention_days = nil
-      @auto_cleanup = false
     end
 
     def subscribe_to(pattern)
