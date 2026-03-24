@@ -17,7 +17,12 @@ RSpec.describe StandardAudit::Configuration do
     end
 
     it "defaults sensitive_keys" do
-      expect(config.sensitive_keys).to eq(%i[password password_confirmation token secret])
+      expect(config.sensitive_keys).to eq(%i[
+        password password_confirmation token secret
+        api_key access_token refresh_token
+        private_key certificate_chain
+        ssn credit_card authorization
+      ])
     end
 
     it "defaults anonymizable_metadata_keys" do

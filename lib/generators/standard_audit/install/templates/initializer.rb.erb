@@ -21,8 +21,10 @@ StandardAudit.configure do |config|
   # config.current_user_agent_resolver = -> { Current.user_agent }
   # config.current_session_id_resolver = -> { Current.session_id }
 
-  # Keys to strip from metadata
-  # config.sensitive_keys = %i[password password_confirmation token secret]
+  # Keys to strip from metadata (defaults include: password, password_confirmation,
+  # token, secret, api_key, access_token, refresh_token, private_key,
+  # certificate_chain, ssn, credit_card, authorization)
+  # config.sensitive_keys += %i[my_custom_secret]
 
   # Run audit log creation in background job
   # config.async = false

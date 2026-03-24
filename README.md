@@ -161,7 +161,7 @@ StandardAudit.configure do |config|
 
   # -- Sensitive Data --
   # Keys automatically stripped from metadata.
-  config.sensitive_keys = %i[password password_confirmation token secret]
+  config.sensitive_keys += %i[my_custom_secret]  # added to built-in defaults
 
   # -- Metadata Builder --
   # Optional proc to transform metadata before storage.
@@ -353,7 +353,7 @@ t.jsonb :metadata, default: {}
 **Sensitive data**: Configure `sensitive_keys` to automatically strip passwords, tokens, and secrets from metadata. Add domain-specific keys as needed:
 
 ```ruby
-config.sensitive_keys = %i[password token secret ssn credit_card_number]
+config.sensitive_keys += %i[medical_record_number]  # extend the built-in defaults
 ```
 
 **Performance**: For high-volume applications, enable async processing and ensure your `audit_logs` table has appropriate indexes (the install generator adds them by default). Consider partitioning by `occurred_at` for very large tables.

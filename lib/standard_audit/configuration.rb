@@ -34,7 +34,15 @@ module StandardAudit
         defined?(Current) && Current.respond_to?(:session_id) ? Current.session_id : nil
       }
 
-      @sensitive_keys = %i[password password_confirmation token secret]
+      # Note: :authorization filters the HTTP Authorization header value.
+      # If you use "authorization" as a metadata key for policy decisions,
+      # rename it (e.g. :authorization_policy) to avoid accidental filtering.
+      @sensitive_keys = %i[
+        password password_confirmation token secret
+        api_key access_token refresh_token
+        private_key certificate_chain
+        ssn credit_card authorization
+      ]
       @metadata_builder = nil
       @anonymizable_metadata_keys = %i[email name ip_address]
       @retention_days = nil
