@@ -77,6 +77,47 @@ RSpec.describe "StandardAudit.batch" do
     expect(log).to be_persisted
   end
 
+  it "drops buffered records when the block raises" do
+    expect {
+      StandardAudit.batch do
+        StandardAudit.record("batch.before_error", actor: user)
+        raise "something went wrong"
+      end
+    }.to raise_error(RuntimeError, "something went wrong")
+
+    expect(StandardAudit::AuditLog.find_by(event_type: "batch.before_error")).to be_nil
+  end
+
+  it "restores non-batching state after an exception" do
+    begin
+      StandardAudit.batch { raise "boom" }
+    rescue RuntimeError
+      # expected
+    end
+
+    # Should be back to normal (non-batching) mode
+    log = StandardAudit.record("after.error", actor: user)
+    expect(log).to be_a(StandardAudit::AuditLog)
+    expect(log).to be_persisted
+  end
+
+  it "flushes nested batches independently" do
+    expect {
+      StandardAudit.batch do
+        StandardAudit.record("outer.first", actor: user)
+
+        StandardAudit.batch do
+          StandardAudit.record("inner.first", actor: user)
+        end
+
+        # Inner batch should already be flushed
+        expect(StandardAudit::AuditLog.find_by(event_type: "inner.first")).to be_present
+
+        StandardAudit.record("outer.second", actor: user)
+      end
+    }.to change(StandardAudit::AuditLog, :count).by(3)
+  end
+
   it "filters sensitive keys in batch mode" do
     StandardAudit.batch do
       StandardAudit.record("batch.sensitive", actor: user, metadata: { action: "test", password: "secret123" })

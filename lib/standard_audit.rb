@@ -68,6 +68,11 @@ module StandardAudit
       end
     end
 
+    # Buffers record calls and flushes them via insert_all! on block exit.
+    # If the block raises, buffered records are dropped — only successful
+    # batches are persisted. Nested batches flush independently.
+    # Note: uses Thread.current for storage, which is not fiber-safe.
+    # Apps using async adapters (Falcon) should avoid concurrent batches.
     def batch
       previous = Thread.current[:standard_audit_batch]
       buffer = Thread.current[:standard_audit_batch] = []
@@ -77,10 +82,6 @@ module StandardAudit
       flush_batch(buffer) if buffer.any?
     ensure
       Thread.current[:standard_audit_batch] = previous
-    end
-
-    def batching?
-      Thread.current[:standard_audit_batch].is_a?(Array)
     end
 
     def subscriber
@@ -93,6 +94,10 @@ module StandardAudit
 
     private
 
+    def batching?
+      Thread.current[:standard_audit_batch].is_a?(Array)
+    end
+
     def flush_batch(buffer)
       now = Time.current
       rows = buffer.map do |attrs|
@@ -103,7 +108,7 @@ module StandardAudit
         )
       end
 
-      StandardAudit::AuditLog.insert_all(rows)
+      StandardAudit::AuditLog.insert_all!(rows)
     end
   end
 end
