@@ -10,6 +10,7 @@ module StandardAudit
 
     def initialize
       @subscriptions = []
+      @applied_presets = []
       @async = false
       @queue_name = :default
       @enabled = true
@@ -50,7 +51,10 @@ module StandardAudit
     end
 
     def use_preset(name)
-      preset = case name.to_sym
+      key = name.to_sym
+      return self if @applied_presets.include?(key)
+
+      preset = case key
       when :standard_id
         require "standard_audit/presets/standard_id"
         StandardAudit::Presets::StandardId
@@ -59,6 +63,8 @@ module StandardAudit
       end
 
       preset.apply(self)
+      @applied_presets << key
+      self
     end
   end
 end

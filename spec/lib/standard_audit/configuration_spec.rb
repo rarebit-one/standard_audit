@@ -161,6 +161,23 @@ RSpec.describe StandardAudit::Configuration do
     it "raises for unknown presets" do
       expect { config.use_preset(:unknown) }.to raise_error(ArgumentError, /Unknown preset/)
     end
+
+    it "accepts string argument" do
+      config.use_preset("standard_id")
+      expect(config.subscriptions.size).to eq(7)
+    end
+
+    it "is idempotent — calling twice does not duplicate subscriptions" do
+      config.use_preset(:standard_id)
+      config.use_preset(:standard_id)
+
+      expect(config.subscriptions.size).to eq(7)
+    end
+
+    it "returns self for chaining" do
+      result = config.use_preset(:standard_id)
+      expect(result).to be(config)
+    end
   end
 
   describe "custom sensitive_keys" do
