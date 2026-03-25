@@ -44,15 +44,20 @@ module StandardAudit
         return
       end
 
-      if config.async
-        job_attrs = attrs.dup
-        job_attrs[:actor_gid] = actor&.to_global_id&.to_s
-        job_attrs[:target_gid] = target&.to_global_id&.to_s
-        job_attrs[:scope_gid] = scope&.to_global_id&.to_s
-        job_attrs[:actor_type] = actor&.class&.name
-        job_attrs[:target_type] = target&.class&.name
-        job_attrs[:scope_type] = scope&.class&.name
-        StandardAudit::CreateAuditLogJob.perform_later(job_attrs.stringify_keys)
+      gid_attrs = {
+        actor_gid: actor&.to_global_id&.to_s,
+        actor_type: actor&.class&.name,
+        target_gid: target&.to_global_id&.to_s,
+        target_type: target&.class&.name,
+        scope_gid: scope&.to_global_id&.to_s,
+        scope_type: scope&.class&.name
+      }
+
+      if batching?
+        Thread.current[:standard_audit_batch] << attrs.merge(gid_attrs)
+        nil
+      elsif config.async
+        StandardAudit::CreateAuditLogJob.perform_later(attrs.merge(gid_attrs).stringify_keys)
       else
         log = StandardAudit::AuditLog.new(attrs)
         log.actor = actor
@@ -63,12 +68,49 @@ module StandardAudit
       end
     end
 
+    # Buffers record calls and flushes them via insert_all! on block exit.
+    # If the block raises, buffered records are dropped — only successful
+    # batches are persisted. Nested batches flush independently.
+    # Block-form record calls (with AS::Notifications) bypass the buffer
+    # and are processed normally since they don't persist records directly.
+    # Note: uses Thread.current for storage, which is not fiber-safe.
+    # Apps using async adapters (Falcon) should avoid concurrent batches.
+    def batch
+      previous = Thread.current[:standard_audit_batch]
+      buffer = Thread.current[:standard_audit_batch] = []
+
+      yield
+
+      flush_batch(buffer) if buffer.any?
+    ensure
+      Thread.current[:standard_audit_batch] = previous
+    end
+
     def subscriber
       @subscriber ||= Subscriber.new
     end
 
     def reset_configuration!
       @configuration = nil
+    end
+
+    private
+
+    def batching?
+      Thread.current[:standard_audit_batch].is_a?(Array)
+    end
+
+    def flush_batch(buffer)
+      now = Time.current
+      rows = buffer.map do |attrs|
+        attrs.merge(
+          id: SecureRandom.uuid,
+          created_at: now,
+          updated_at: now
+        )
+      end
+
+      StandardAudit::AuditLog.insert_all!(rows)
     end
   end
 end
