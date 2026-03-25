@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-03-25
+
+### Added
+
+- Batch insert mode via `StandardAudit.batch { }` for high-volume audit logging
+- `StandardAudit::CleanupJob` for automated retention enforcement
+- `config.use_preset(:standard_id)` to subscribe to StandardId auth events in one call
+- GIN index on metadata JSONB column in install generator (PostgreSQL)
+- CI-driven gem publishing via GitHub Actions trusted publisher
+
+### Changed
+
+- AuditLog records are now immutable (raises `ReadOnlyRecord` on update/destroy)
+- Migration template uses `jsonb` instead of `json` for metadata column
+- Expanded default `sensitive_keys` to include `api_key`, `access_token`, `refresh_token`, `private_key`, `certificate_chain`, `ssn`, `credit_card`, `authorization`
+- Removed unused `auto_cleanup` config attribute (use `CleanupJob` directly)
+
 ## [0.1.0] - 2026-03-03
 
 ### Added
