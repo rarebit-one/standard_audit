@@ -1,8 +1,17 @@
+require "openssl"
+
 module StandardAudit
   class AuditLog < ApplicationRecord
     self.table_name = "audit_logs"
 
+    CHECKSUM_FIELDS = %w[
+      id event_type actor_gid actor_type target_gid target_type
+      scope_gid scope_type metadata request_id ip_address
+      user_agent session_id occurred_at
+    ].freeze
+
     before_create :assign_uuid, if: -> { id.blank? }
+    before_create :compute_checksum, if: -> { checksum.blank? }
     after_create_commit :emit_created_event
 
     # Audit logs are append-only. Use update_columns for privileged
@@ -156,6 +165,90 @@ module StandardAudit
       }
     end
 
+    # Recomputes the checksum from the record's current field values and the
+    # given previous checksum. Useful for verification without saving.
+    def compute_checksum_value(previous_checksum: nil)
+      self.class.compute_checksum_value(
+        attributes.slice(*CHECKSUM_FIELDS),
+        previous_checksum: previous_checksum
+      )
+    end
+
+    def self.compute_checksum_value(attrs, previous_checksum: nil)
+      canonical = CHECKSUM_FIELDS.map { |f|
+        value = attrs[f]
+        value = value.to_json if value.is_a?(Hash)
+        value = value.utc.strftime("%Y-%m-%dT%H:%M:%S.%6NZ") if value.respond_to?(:strftime) && value.respond_to?(:utc)
+        "#{f}=#{value}"
+      }.join("|")
+
+      canonical = "#{previous_checksum}|#{canonical}" if previous_checksum.present?
+
+      OpenSSL::Digest::SHA256.hexdigest(canonical)
+    end
+
+    # Verifies the integrity of the audit log chain. Returns a result hash with
+    # :valid (boolean), :verified (count), and :failures (array of hashes).
+    # Processes records in chronological order by created_at.
+    def self.verify_chain(scope: nil, batch_size: 1000)
+      relation = scope ? where(scope_gid: scope.to_global_id.to_s) : all
+      relation = relation.order(created_at: :asc, id: :asc)
+
+      previous_checksum = nil
+      verified = 0
+      failures = []
+
+      relation.find_each(batch_size: batch_size) do |record|
+        if record.checksum.blank?
+          previous_checksum = nil
+          next
+        end
+
+        expected = record.compute_checksum_value(previous_checksum: previous_checksum)
+
+        if record.checksum != expected
+          failures << {
+            id: record.id,
+            event_type: record.event_type,
+            created_at: record.created_at,
+            expected: expected,
+            actual: record.checksum
+          }
+        end
+
+        verified += 1
+        previous_checksum = record.checksum
+      end
+
+      { valid: failures.empty?, verified: verified, failures: failures }
+    end
+
+    # Backfills checksums for records that don't have them (e.g. pre-existing
+    # records before the checksum feature was added).
+    def self.backfill_checksums!(batch_size: 1000)
+      relation = order(created_at: :asc, id: :asc)
+      previous_checksum = nil
+      count = 0
+
+      relation.find_each(batch_size: batch_size) do |record|
+        if record.checksum.present?
+          previous_checksum = record.checksum
+          next
+        end
+
+        new_checksum = compute_checksum_value(
+          record.attributes.slice(*CHECKSUM_FIELDS),
+          previous_checksum: previous_checksum
+        )
+        record.update_columns(checksum: new_checksum)
+
+        previous_checksum = new_checksum
+        count += 1
+      end
+
+      count
+    end
+
     private
 
     def emit_created_event
@@ -170,8 +263,13 @@ module StandardAudit
       Rails.logger.warn("[StandardAudit] Failed to emit event: #{e.class}: #{e.message}")
     end
 
+    def compute_checksum
+      previous = self.class.order(created_at: :desc, id: :desc).limit(1).pick(:checksum)
+      self.checksum = compute_checksum_value(previous_checksum: previous)
+    end
+
     def assign_uuid
-      self.id = SecureRandom.uuid
+      self.id = SecureRandom.uuid_v7
     end
   end
 end

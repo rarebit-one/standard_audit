@@ -102,12 +102,29 @@ module StandardAudit
 
     def flush_batch(buffer)
       now = Time.current
-      rows = buffer.map do |attrs|
-        attrs.merge(
-          id: SecureRandom.uuid,
+      previous_checksum = StandardAudit::AuditLog
+        .order(created_at: :desc, id: :desc)
+        .limit(1)
+        .pick(:checksum)
+
+      # Generate sorted UUIDs to ensure batch ordering matches id ordering.
+      # UUIDv7 within the same millisecond can have random lower bits that
+      # don't sort in generation order.
+      ids = buffer.size.times.map { SecureRandom.uuid_v7 }.sort
+
+      rows = buffer.each_with_index.map do |attrs, i|
+        row = attrs.merge(
+          id: ids[i],
           created_at: now,
           updated_at: now
         )
+        checksum = StandardAudit::AuditLog.compute_checksum_value(
+          row.stringify_keys,
+          previous_checksum: previous_checksum
+        )
+        row[:checksum] = checksum
+        previous_checksum = checksum
+        row
       end
 
       StandardAudit::AuditLog.insert_all!(rows)

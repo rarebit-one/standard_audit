@@ -14,6 +14,7 @@ class CreateAuditLogs < ActiveRecord::Migration[8.1]
       t.string :session_id
       t.json :metadata, default: {}
       t.datetime :occurred_at, null: false
+      t.string :checksum
       t.timestamps
     end
 
