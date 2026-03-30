@@ -55,6 +55,30 @@ namespace :standard_audit do
     puts "Anonymized #{count} audit logs for #{args[:actor_gid]}"
   end
 
+  desc "Verify audit log chain integrity (tamper detection)"
+  task verify: :environment do
+    result = StandardAudit::AuditLog.verify_chain
+
+    puts "Audit Log Chain Verification"
+    puts "============================="
+    puts "Records verified: #{result[:verified]}"
+    puts "Chain valid: #{result[:valid]}"
+
+    if result[:failures].any?
+      puts "\nTampered records detected: #{result[:failures].size}"
+      result[:failures].each do |failure|
+        puts "  #{failure[:id]} (#{failure[:event_type]}) at #{failure[:created_at]}"
+      end
+      abort "Chain verification failed"
+    end
+  end
+
+  desc "Backfill checksums for records that don't have them"
+  task backfill_checksums: :environment do
+    count = StandardAudit::AuditLog.backfill_checksums!
+    puts "Backfilled checksums for #{count} audit log records"
+  end
+
   desc "Export audit logs for a specific actor (GDPR right to access)"
   task :export_actor, [:actor_gid, :output] => :environment do |_t, args|
     raise "actor_gid is required" unless args[:actor_gid].present?
