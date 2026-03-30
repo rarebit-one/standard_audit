@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-03-31
+
+### Added
+
+- Tamper detection via chained SHA-256 checksums — each record's `checksum` column hashes its content plus the previous record's checksum
+- `AuditLog.verify_chain` to walk the chain and detect modified records
+- `AuditLog.backfill_checksums!` to retroactively checksum pre-existing records
+- Rake tasks: `standard_audit:verify` (exits non-zero on failure) and `standard_audit:backfill_checksums`
+- Upgrade generator: `rails g standard_audit:add_checksums` adds the checksum column and created_at index
+
+### Changed
+
+- Primary keys now use UUIDv7 (time-ordered) instead of UUIDv4 for deterministic chain ordering
+- Batch inserts (`StandardAudit.batch`) now compute chained checksums
+
+### Upgrade
+
+Run the upgrade generator to add the checksum column:
+
+```bash
+rails generate standard_audit:add_checksums
+rails db:migrate
+```
+
+Optionally backfill checksums for existing records:
+
+```bash
+rake standard_audit:backfill_checksums
+```
+
 ## [0.2.0] - 2026-03-25
 
 ### Added
