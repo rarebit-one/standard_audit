@@ -16,7 +16,7 @@ class CreateAuditLogs < ActiveRecord::Migration[<%= ActiveRecord::Migration.curr
       t.string :session_id
       t.jsonb :metadata, default: {}
       t.datetime :occurred_at, null: false
-      t.string :checksum
+      t.string :checksum, limit: 64
       t.timestamps
     end
 
@@ -26,6 +26,7 @@ class CreateAuditLogs < ActiveRecord::Migration[<%= ActiveRecord::Migration.curr
     add_index :audit_logs, [:scope_type, :scope_gid]
     add_index :audit_logs, :request_id
     add_index :audit_logs, [:occurred_at, :created_at]
+    add_index :audit_logs, :created_at
     add_index :audit_logs, :session_id
     # GIN index requires PostgreSQL; remove if using another database
     add_index :audit_logs, :metadata, using: :gin

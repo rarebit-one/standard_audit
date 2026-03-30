@@ -69,6 +69,7 @@ namespace :standard_audit do
       result[:failures].each do |failure|
         puts "  #{failure[:id]} (#{failure[:event_type]}) at #{failure[:created_at]}"
       end
+      abort "Chain verification failed"
     end
   end
 

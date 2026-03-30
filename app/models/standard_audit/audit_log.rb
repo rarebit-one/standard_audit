@@ -189,35 +189,39 @@ module StandardAudit
 
     # Verifies the integrity of the audit log chain. Returns a result hash with
     # :valid (boolean), :verified (count), and :failures (array of hashes).
-    # Processes records in chronological order by created_at.
+    #
+    # Records are processed in (created_at, id) order. Records without a
+    # checksum (pre-feature data) reset the chain — the next checksummed
+    # record starts a new independent chain segment.
     def self.verify_chain(scope: nil, batch_size: 1000)
       relation = scope ? where(scope_gid: scope.to_global_id.to_s) : all
-      relation = relation.order(created_at: :asc, id: :asc)
 
       previous_checksum = nil
       verified = 0
       failures = []
 
-      relation.find_each(batch_size: batch_size) do |record|
-        if record.checksum.blank?
-          previous_checksum = nil
-          next
+      relation.in_batches(of: batch_size) do |batch|
+        batch.order(created_at: :asc, id: :asc).each do |record|
+          if record.checksum.blank?
+            previous_checksum = nil
+            next
+          end
+
+          expected = record.compute_checksum_value(previous_checksum: previous_checksum)
+
+          if record.checksum != expected
+            failures << {
+              id: record.id,
+              event_type: record.event_type,
+              created_at: record.created_at,
+              expected: expected,
+              actual: record.checksum
+            }
+          end
+
+          verified += 1
+          previous_checksum = record.checksum
         end
-
-        expected = record.compute_checksum_value(previous_checksum: previous_checksum)
-
-        if record.checksum != expected
-          failures << {
-            id: record.id,
-            event_type: record.event_type,
-            created_at: record.created_at,
-            expected: expected,
-            actual: record.checksum
-          }
-        end
-
-        verified += 1
-        previous_checksum = record.checksum
       end
 
       { valid: failures.empty?, verified: verified, failures: failures }
@@ -226,24 +230,25 @@ module StandardAudit
     # Backfills checksums for records that don't have them (e.g. pre-existing
     # records before the checksum feature was added).
     def self.backfill_checksums!(batch_size: 1000)
-      relation = order(created_at: :asc, id: :asc)
       previous_checksum = nil
       count = 0
 
-      relation.find_each(batch_size: batch_size) do |record|
-        if record.checksum.present?
-          previous_checksum = record.checksum
-          next
+      in_batches(of: batch_size) do |batch|
+        batch.order(created_at: :asc, id: :asc).each do |record|
+          if record.checksum.present?
+            previous_checksum = record.checksum
+            next
+          end
+
+          new_checksum = compute_checksum_value(
+            record.attributes.slice(*CHECKSUM_FIELDS),
+            previous_checksum: previous_checksum
+          )
+          record.update_columns(checksum: new_checksum)
+
+          previous_checksum = new_checksum
+          count += 1
         end
-
-        new_checksum = compute_checksum_value(
-          record.attributes.slice(*CHECKSUM_FIELDS),
-          previous_checksum: previous_checksum
-        )
-        record.update_columns(checksum: new_checksum)
-
-        previous_checksum = new_checksum
-        count += 1
       end
 
       count
@@ -263,6 +268,10 @@ module StandardAudit
       Rails.logger.warn("[StandardAudit] Failed to emit event: #{e.class}: #{e.message}")
     end
 
+    # Fetches the most recent record's checksum and chains the new record to it.
+    # Note: concurrent inserts can read the same "previous" record, forking
+    # the chain. Use database-level advisory locks if you need serializable
+    # chain integrity under concurrent writes.
     def compute_checksum
       previous = self.class.order(created_at: :desc, id: :desc).limit(1).pick(:checksum)
       self.checksum = compute_checksum_value(previous_checksum: previous)

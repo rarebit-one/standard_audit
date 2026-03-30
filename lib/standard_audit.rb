@@ -108,8 +108,10 @@ module StandardAudit
         .pick(:checksum)
 
       # Generate sorted UUIDs to ensure batch ordering matches id ordering.
-      # UUIDv7 within the same millisecond can have random lower bits that
-      # don't sort in generation order.
+      # UUIDv7 within the same millisecond can have non-monotonic lower bits;
+      # sorting guarantees the chain order matches the id order used by
+      # verify_chain. Under very high throughput this is a best-effort
+      # guarantee — see compute_checksum's concurrency note.
       ids = buffer.size.times.map { SecureRandom.uuid_v7 }.sort
 
       rows = buffer.each_with_index.map do |attrs, i|
