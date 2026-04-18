@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Rails 8.1+ structured event reporter (`Rails.event`) integration. A new `StandardAudit::EventSubscriber` is registered automatically when `Rails.event` is available, so `Rails.event.notify("myapp.orders.created", actor: user, target: order)` persists an `AuditLog` the same way an `ActiveSupport::Notifications.instrument` call does. Event name is matched against the existing `subscribe_to` patterns (supports `*`, `**`, and `Regexp`). `Rails.event.set_context(...)` values take precedence over the `Current.*` resolvers for `request_id`, `ip_address`, `user_agent`, and `session_id`. `Rails.event.tagged(...)` and `source_location` are captured under the reserved metadata keys `_tags` and `_source`.
+
 ## [0.3.0] - 2026-03-31
 
 ### Added

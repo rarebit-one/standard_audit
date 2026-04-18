@@ -2,6 +2,7 @@ require "standard_audit/version"
 require "standard_audit/engine"
 require "standard_audit/configuration"
 require "standard_audit/subscriber"
+require "standard_audit/event_subscriber"
 require "standard_audit/auditable"
 require "standard_audit/audit_scope"
 
@@ -88,6 +89,10 @@ module StandardAudit
 
     def subscriber
       @subscriber ||= Subscriber.new
+    end
+
+    def event_subscriber
+      @event_subscriber ||= EventSubscriber.new
     end
 
     def reset_configuration!
