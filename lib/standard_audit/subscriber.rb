@@ -67,7 +67,7 @@ module StandardAudit
         log.save!
       end
     rescue => e
-      Rails.logger.error("[StandardAudit] Error creating audit log: #{e.message}")
+      Rails.logger.error("[StandardAudit] Error creating audit log: #{e.class}: #{e.message}")
     end
 
     def extract_metadata(payload, config)

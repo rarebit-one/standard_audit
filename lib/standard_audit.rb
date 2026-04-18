@@ -2,10 +2,15 @@ require "standard_audit/version"
 require "standard_audit/engine"
 require "standard_audit/configuration"
 require "standard_audit/subscriber"
+require "standard_audit/event_subscriber"
 require "standard_audit/auditable"
 require "standard_audit/audit_scope"
 
 module StandardAudit
+  # Metadata keys owned internally by StandardAudit. Never filtered by
+  # `sensitive_keys` even if a user adds them there.
+  RESERVED_METADATA_KEYS = %w[_tags _source].freeze
+
   class << self
     def configure
       yield(config) if block_given?
@@ -20,8 +25,9 @@ module StandardAudit
 
       actor ||= config.current_actor_resolver.call
 
-      # Filter sensitive keys
-      sensitive = config.sensitive_keys.map(&:to_s)
+      # Filter sensitive keys. `_tags` and `_source` are reserved internal
+      # metadata keys owned by EventSubscriber and are never stripped.
+      sensitive = config.sensitive_keys.map(&:to_s) - RESERVED_METADATA_KEYS
       filtered_metadata = metadata.reject { |k, _| sensitive.include?(k.to_s) }
 
       attrs = {
@@ -88,6 +94,10 @@ module StandardAudit
 
     def subscriber
       @subscriber ||= Subscriber.new
+    end
+
+    def event_subscriber
+      @event_subscriber ||= EventSubscriber.new
     end
 
     def reset_configuration!

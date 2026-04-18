@@ -52,11 +52,38 @@ StandardAudit::AuditLog.for_actor(current_user).this_week
 
 ## Recording Events
 
-StandardAudit provides three ways to record audit events.
+StandardAudit provides four ways to record audit events. On Rails 8.1+, prefer `Rails.event` — it is the standard Rails interface for structured events.
+
+### Rails.event (Rails 8.1+)
+
+StandardAudit registers a `Rails.event` subscriber at boot, so any `notify` call whose name matches a configured `subscribe_to` pattern is persisted automatically:
+
+```ruby
+class ApplicationController < ActionController::Base
+  before_action do
+    Rails.event.set_context(
+      request_id: request.request_id,
+      ip_address: request.remote_ip,
+      user_agent: request.user_agent
+    )
+  end
+end
+
+Rails.event.tagged("checkout") do
+  Rails.event.notify("myapp.orders.created",
+    actor: current_user,
+    target: @order,
+    scope: current_organisation,
+    total: @order.total
+  )
+end
+```
+
+`Rails.event.set_context` values override the `Current.*` resolvers for `request_id`, `ip_address`, `user_agent`, and `session_id`. Tags and `source_location` are captured as metadata under the reserved keys `_tags` and `_source`.
 
 ### Convenience API
 
-The simplest approach — call `StandardAudit.record` directly:
+Call `StandardAudit.record` directly:
 
 ```ruby
 StandardAudit.record("orders.created",
@@ -71,7 +98,7 @@ When `actor` is omitted, it falls back to the configured `current_actor_resolver
 
 ### ActiveSupport::Notifications
 
-Instrument events and let the subscriber handle persistence:
+For Rails < 8.1, or when `Rails.event` is unavailable, instrument events via `ActiveSupport::Notifications`:
 
 ```ruby
 ActiveSupport::Notifications.instrument("myapp.orders.created", {
