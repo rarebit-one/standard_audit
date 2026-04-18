@@ -123,6 +123,44 @@ RSpec.describe StandardAudit::EventSubscriber, skip: !Rails.respond_to?(:event) 
       Rails.event.notify("audit.event.async", actor: user)
     end
 
+    it "ignores events with a nil name without logging an error" do
+      allow(Rails.logger).to receive(:error)
+
+      expect {
+        subscriber.emit(name: nil, payload: { actor: user })
+      }.not_to change(StandardAudit::AuditLog, :count)
+
+      expect(Rails.logger).not_to have_received(:error)
+    end
+
+    it "warns and drops tags when they are not a Hash" do
+      allow(Rails.logger).to receive(:warn)
+
+      expect {
+        subscriber.emit(
+          name: "audit.event.weird_tags",
+          payload: { actor: user },
+          tags: ["unexpected"]
+        )
+      }.to change(StandardAudit::AuditLog, :count).by(1)
+
+      log = StandardAudit::AuditLog.last
+      expect(log.metadata).not_to have_key("_tags")
+      expect(Rails.logger).to have_received(:warn).with(/unexpected type: Array/)
+    end
+
+    it "preserves _tags and _source even if added to sensitive_keys" do
+      StandardAudit.config.sensitive_keys += %i[_tags _source]
+
+      Rails.event.tagged("reserved") do
+        Rails.event.notify("audit.event.reserved", actor: user)
+      end
+
+      log = StandardAudit::AuditLog.last
+      expect(log.metadata["_tags"]).to include("reserved" => true)
+      expect(log.metadata).to have_key("_source")
+    end
+
     it "does not raise when persistence fails" do
       allow(StandardAudit::AuditLog).to receive(:new).and_raise(StandardError, "boom")
       allow(Rails.logger).to receive(:error)

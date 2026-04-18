@@ -13,23 +13,30 @@ module StandardAudit
   class EventSubscriber
     RESERVED_PAYLOAD_KEYS = %i[actor target scope request_id ip_address user_agent session_id].freeze
 
+    def initialize
+      @pattern_cache = {}
+      @pattern_cache_mutex = Mutex.new
+    end
+
     def emit(event)
       return unless StandardAudit.config.enabled
-      return unless matches_subscription?(event[:name])
+
+      name = event[:name]
+      return if name.nil?
+      return unless matches_subscription?(name)
 
       config  = StandardAudit.config
       payload = event[:payload] || {}
       context = event[:context] || {}
-      tags    = event[:tags]    || {}
 
       actor  = config.actor_extractor.call(payload)
       target = config.target_extractor.call(payload)
       scope  = config.scope_extractor.call(payload)
 
-      metadata = build_metadata(payload, tags, event[:source_location], config)
+      metadata = build_metadata(payload, event[:tags], event[:source_location], config)
 
       StandardAudit.record(
-        event[:name],
+        name,
         actor: actor,
         target: target,
         scope: scope,
@@ -64,23 +71,31 @@ module StandardAudit
     end
 
     def compiled_pattern_for(pattern)
-      @pattern_cache ||= {}
-      @pattern_cache[pattern] ||= Regexp.new(
-        "\\A" + Regexp.escape(pattern).gsub('\\*\\*', ".*").gsub('\\*', "[^.]*") + "\\z"
-      )
+      cached = @pattern_cache[pattern]
+      return cached if cached
+
+      @pattern_cache_mutex.synchronize do
+        @pattern_cache[pattern] ||= Regexp.new(
+          "\\A" + Regexp.escape(pattern).gsub('\\*\\*', ".*").gsub('\\*', "[^.]*") + "\\z"
+        )
+      end
     end
 
+    # `_tags` and `_source` are reserved metadata keys owned by this
+    # subscriber. Sensitive-key filtering is handled downstream by
+    # `StandardAudit.record`, so we don't re-run it here.
     def build_metadata(payload, tags, source_location, config)
       reserved = RESERVED_PAYLOAD_KEYS.map(&:to_s)
       raw = payload.reject { |k, _| reserved.include?(k.to_s) }
       raw = config.metadata_builder.call(raw) if config.metadata_builder
 
-      sensitive = config.sensitive_keys.map(&:to_s)
-      cleaned = raw.reject { |k, _| sensitive.include?(k.to_s) }
-
-      cleaned[:_tags] = tags if tags.is_a?(Hash) && tags.any?
-      cleaned[:_source] = source_location if source_location
-      cleaned
+      if tags.is_a?(Hash) && tags.any?
+        raw[:_tags] = tags
+      elsif tags && !tags.is_a?(Hash)
+        Rails.logger.warn("[StandardAudit] Dropping Rails.event tags of unexpected type: #{tags.class}")
+      end
+      raw[:_source] = source_location if source_location
+      raw
     end
   end
 end
