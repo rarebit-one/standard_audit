@@ -253,7 +253,7 @@ DEPENDENCIES
   rspec-rails (~> 8.0)
   rubocop-rails-omakase
   shoulda-matchers (~> 7.0)
-  simplecov
+  simplecov (~> 0.22)
   sqlite3
   standard_audit!
 

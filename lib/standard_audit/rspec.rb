@@ -19,10 +19,10 @@ require "standard_audit"
 # Specs that need to assert on subscriber behaviour should manage that
 # locally.
 #
-# Intentionally `before(:each)` rather than `after(:each)` so the reset
-# always runs even when a previous example aborted in an after hook.
+# Intentionally `before(:example)` rather than `after(:example)` so the
+# reset always runs even when a previous example aborted in an after hook.
 RSpec.configure do |config|
-  config.before(:each) do
+  config.before(:example) do
     Thread.current[:standard_audit_batch] = nil
     StandardAudit.reset_configuration!
   end
