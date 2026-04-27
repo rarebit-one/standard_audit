@@ -63,7 +63,6 @@ module StandardAudit
         end
 
         if File.exist?(File.join(destination_root, initializer_path)) && !options[:force]
-          warn "[standard_audit] #{initializer_path} already exists; skipping. Re-run with --force to overwrite."
           say_status("identical", "#{initializer_path} (already exists; pass --force to overwrite)", :blue)
           return
         end
