@@ -10,9 +10,6 @@ RSpec.describe StandardAudit::Generators::InstallGenerator do
   before do
     FileUtils.rm_rf(destination_root)
     FileUtils.mkdir_p(destination_root)
-
-    # Set up the generator with the test destination
-    allow(Rails).to receive(:root).and_return(Pathname.new(destination_root))
   end
 
   after do
@@ -92,6 +89,55 @@ RSpec.describe StandardAudit::Generators::InstallGenerator do
       expect(File.read(original_migration)).to eq(original_migration_content)
 
       # Initializer: untouched
+      expect(File.mtime(initializer_path)).to eq(original_initializer_mtime)
+    end
+
+    it "writes a fresh initializer when only the migration is present" do
+      run_generator
+      expect(migration_files.size).to eq(1)
+      expect(File.exist?(initializer_path)).to be true
+
+      original_migration = migration_files.first
+      original_migration_content = File.read(original_migration)
+
+      # Simulate a host that manually deleted the initializer.
+      FileUtils.rm(initializer_path)
+      expect(File.exist?(initializer_path)).to be false
+
+      run_generator
+
+      # Migration: still exactly one file, unchanged (idempotent skip).
+      expect(migration_files.size).to eq(1)
+      expect(migration_files.first).to eq(original_migration)
+      expect(File.read(original_migration)).to eq(original_migration_content)
+
+      # Initializer: written fresh.
+      expect(File.exist?(initializer_path)).to be true
+      expect(File.read(initializer_path)).to include("StandardAudit.configure")
+    end
+
+    it "writes a fresh migration when only the initializer is present" do
+      run_generator
+      expect(migration_files.size).to eq(1)
+      expect(File.exist?(initializer_path)).to be true
+
+      original_initializer_mtime = File.mtime(initializer_path)
+
+      # Simulate a host that manually deleted the migration.
+      FileUtils.rm(migration_files.first)
+      expect(migration_files).to be_empty
+
+      # Sleep briefly so the new migration timestamp differs from the previous one
+      # (next_migration_number is second-resolution).
+      sleep 1.1
+
+      run_generator
+
+      # Migration: a new one was written.
+      expect(migration_files.size).to eq(1)
+      expect(File.read(migration_files.first)).to include("create_table :audit_logs")
+
+      # Initializer: untouched (idempotent skip).
       expect(File.mtime(initializer_path)).to eq(original_initializer_mtime)
     end
   end
