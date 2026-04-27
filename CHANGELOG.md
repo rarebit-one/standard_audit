@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- CI and release workflows migrated to the shared `rarebit-one/.github` reusable workflows (`reusable-gem-ci.yml@v1`, `reusable-gem-release.yml@v1`); `.github/workflows/ci.yml` and `release.yml` are now thin shims.
 - The `standard_audit:install` generator is now idempotent. Re-running it skips the migration when a `*_create_audit_logs.rb` file already exists in `db/migrate/`, and skips the initializer when `config/initializers/standard_audit.rb` already exists. New flags: `--skip-migration`, `--skip-initializer`, and `--force` (overwrite the existing initializer; defaults to skip without an interactive prompt).
 
 ### Removed
