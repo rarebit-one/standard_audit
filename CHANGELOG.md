@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The `standard_audit:install` generator is now idempotent. Re-running it skips the migration when a `*_create_audit_logs.rb` file already exists in `db/migrate/`, and skips the initializer when `config/initializers/standard_audit.rb` already exists. New flags: `--skip-migration`, `--skip-initializer`, and `--force` (overwrite the existing initializer; defaults to skip without an interactive prompt).
+
 ### Removed
 
 - **BREAKING:** Dropped support for Ruby < 4.0. `required_ruby_version` is now `>= 4.0`. Hosts must upgrade to Ruby 4.0+ before bundling this version. CI tests all four published 4.0.x patches.
