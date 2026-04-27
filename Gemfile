@@ -1,8 +1,9 @@
 source "https://rubygems.org"
 
-ruby file: ".ruby-version"
-
 # Specify your gem's dependencies in standard_audit.gemspec.
+# The minimum Ruby version is declared in standard_audit.gemspec
+# (required_ruby_version) so the gem stays installable on any supported
+# patch release; CI runs against the full 4.x matrix.
 gemspec
 
 gem "puma"
