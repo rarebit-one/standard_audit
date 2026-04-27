@@ -23,6 +23,8 @@ This creates:
 - A migration for the `audit_logs` table (UUID primary keys, JSON metadata)
 - An initializer at `config/initializers/standard_audit.rb`
 
+The generator is idempotent — re-running it skips the migration when a `*_create_audit_logs.rb` already exists in `db/migrate/`, and skips the initializer when `config/initializers/standard_audit.rb` already exists. Pass `--skip-migration` or `--skip-initializer` to opt out of individual steps, or `--force` to overwrite the existing initializer.
+
 ## Quick Start
 
 ### 1. Subscribe to events
