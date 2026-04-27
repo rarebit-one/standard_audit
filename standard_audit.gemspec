@@ -7,7 +7,7 @@ Gem::Specification.new do |spec|
   spec.email       = ["code@jaryl.dev"]
   spec.homepage    = "https://github.com/rarebit-one/standard_audit"
   spec.summary     = "Database-backed audit logging for Rails via Rails.event and ActiveSupport::Notifications."
-  spec.description = "StandardAudit is a standalone Rails gem for database-backed audit logging. On Rails 8.1+ it subscribes to Rails.event; on earlier versions it subscribes to ActiveSupport::Notifications. Generic, flexible, and works with any Rails application."
+  spec.description = "StandardAudit is a standalone Rails gem for database-backed audit logging. On Rails 8.1+ it subscribes to Rails.event; on Rails 8.0 it falls back to ActiveSupport::Notifications. Generic, flexible, and works with any Rails application."
   spec.license     = "MIT"
 
   spec.metadata["homepage_uri"] = spec.homepage
@@ -21,9 +21,9 @@ Gem::Specification.new do |spec|
 
   spec.required_ruby_version = ">= 4.0"
 
-  spec.add_dependency "activerecord", ">= 7.1"
-  spec.add_dependency "activejob", ">= 7.1"
-  spec.add_dependency "activesupport", ">= 7.1"
+  spec.add_dependency "activerecord", ">= 8.0"
+  spec.add_dependency "activejob", ">= 8.0"
+  spec.add_dependency "activesupport", ">= 8.0"
   spec.add_dependency "globalid", ">= 1.0"
 
   spec.add_development_dependency "simplecov", "~> 0.22"
