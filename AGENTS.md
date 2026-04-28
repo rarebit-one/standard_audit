@@ -121,11 +121,21 @@ shortcut that calls `StandardAudit.record(actor: self, ...)`.
 `include StandardAudit::AuditScope` adds `scoped_audit_logs` to
 tenant/organisation models so you can fetch all activity within a scope.
 
-### Presets
+### Subscribing to gem events
 
-`config.use_preset(:standard_id)` applies the StandardId subscription set
-from `lib/standard_audit/presets/standard_id.rb`. Presets are idempotent —
-applying the same one twice is a no-op.
+`config.subscribe_to(pattern)` accepts a string, glob, or `Regexp`. Each
+event-publishing gem documents its own event namespace; the host app
+subscribes to whatever patterns it wants audited:
+
+```ruby
+config.subscribe_to "standard_id.authentication.*"
+config.subscribe_to "standard_id.session.created"
+config.subscribe_to "standard_circuit.circuit.*"
+```
+
+This gem deliberately has no knowledge of specific publisher gems —
+keeping the dependency direction one-way (publishers don't know about
+audit; audit doesn't know about specific publishers).
 
 ### GDPR methods
 
@@ -155,12 +165,6 @@ applying the same one twice is a no-op.
    older Rails.
 4. Wrap a unit of work in `StandardAudit.record(...) { ... }` for the block
    form (instruments via AS::Notifications and only records on success).
-
-### Adding a preset
-
-1. Create `lib/standard_audit/presets/<name>.rb` with a `SUBSCRIPTIONS` array
-   and a `self.apply(config)` method that calls `config.subscribe_to(...)`.
-2. Add a `when :<name>` branch to `Configuration#use_preset`.
 
 ### Async processing
 

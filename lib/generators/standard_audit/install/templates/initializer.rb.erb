@@ -1,8 +1,11 @@
 StandardAudit.configure do |config|
-  # Use a preset to subscribe to common event patterns
-  # config.use_preset(:standard_id)
-
-  # Or subscribe to ActiveSupport::Notifications patterns manually
+  # Subscribe to ActiveSupport::Notifications / Rails.event patterns.
+  # Each gem documents its own event namespace; subscribe to whichever
+  # patterns you want audited:
+  # config.subscribe_to "standard_id.authentication.*"
+  # config.subscribe_to "standard_id.session.created"
+  # config.subscribe_to "standard_id.session.revoked"
+  # config.subscribe_to "standard_circuit.circuit.*"
   # config.subscribe_to "audit.**"
 
   # Actor extractor from notification payload
