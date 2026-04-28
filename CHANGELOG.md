@@ -14,6 +14,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **BREAKING:** Removed `Configuration#use_preset` and the `lib/standard_audit/presets/` directory. The preset pattern (`config.use_preset(:standard_id)`) created a direct dependency from `standard_audit` on a specific publisher gem, which inverted the intended dependency direction — `standard_audit` should be a generic event consumer with no knowledge of any particular publisher. Host apps should subscribe to event patterns directly:
+  ```ruby
+  StandardAudit.configure do |c|
+    c.subscribe_to "standard_id.authentication.*"
+    c.subscribe_to "standard_id.session.created"
+    c.subscribe_to "standard_id.session.revoked"
+    c.subscribe_to "standard_id.session.expired"
+    c.subscribe_to "standard_id.account.*"
+  end
+  ```
+  Each publisher gem documents its event namespace.
 - **BREAKING:** Dropped support for Ruby < 4.0. `required_ruby_version` is now `>= 4.0`. Hosts must upgrade to Ruby 4.0+ before bundling this version. CI tests all four published 4.0.x patches.
 - **BREAKING:** Dropped support for Rails < 8.0. `activerecord`, `activejob`, and `activesupport` constraints are now `>= 8.0` (was `>= 7.1`). Hosts on Rails 7.x must upgrade to Rails 8.0+ before bundling this version. Aligns with the org-wide policy of supporting Rails 8 and up.
 
