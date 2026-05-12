@@ -29,10 +29,8 @@ See the `/worktree` and `/start` skills for full conventions and flags.
 
 This gem is consumed by all three web apps in the workspace:
 
-| App | Constraint | Style |
-|---|---|---|
-| `fundbright-web` | `~> 0.5.0` | rubygems |
-| `luminality-web` | `~> 0.5.0` | rubygems |
-| `nutripod-web` | `~> 0.5.0` | rubygems |
+- `fundbright-web`
+- `luminality-web`
+- `nutripod-web`
 
-After publishing a new version via `/publish-gem`, roll it out with the workspace-level `/rollout-gem standard_audit [<version>]` skill. Keep this list in sync with the consumer matrix in `<workspace>/.claude/skills/rollout-gem/SKILL.md`.
+After publishing a new version via `/publish-gem`, roll it out with the workspace-level `/rollout-gem standard_audit [<version>]` skill (defined at the rarebit-one workspace root, one directory above this repo). The canonical consumer matrix — including version constraints and any non-rubygems sources — lives in that skill's `SKILL.md`; the list here is a summary so version pins don't drift between two files.
