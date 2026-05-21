@@ -14,5 +14,5 @@ jobs:
   ci:
     uses: rarebit-one/.github/.github/workflows/reusable-gem-ci.yml@v1
     with:
-      ruby-versions: '["4.0.0","4.0.1","4.0.2","4.0.3"]'
+      ruby-versions: '["4.0.0","4.0.1","4.0.2","4.0.3","4.0.4"]'
       lint-command: bin/rubocop -f github
