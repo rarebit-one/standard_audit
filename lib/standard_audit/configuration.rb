@@ -45,7 +45,22 @@ module StandardAudit
       ]
       @metadata_builder = nil
       @anonymizable_metadata_keys = %i[email name ip_address]
-      @retention_days = nil
+
+      # Retention defaults from ENV so it can be set per-environment without a
+      # code change. Unset/blank/non-positive => nil (infinite retention, the
+      # compliance-safe default that never auto-deletes). A host app can still
+      # override with `config.retention_days = N` in its initializer.
+      @retention_days = self.class.retention_days_from_env
+    end
+
+    # Parses STANDARD_AUDIT_RETENTION_DAYS into a positive Integer, or nil when
+    # unset/blank/zero/negative/non-numeric (=> infinite retention).
+    def self.retention_days_from_env
+      raw = ENV["STANDARD_AUDIT_RETENTION_DAYS"]
+      return nil if raw.nil? || raw.strip.empty?
+
+      days = Integer(raw, exception: false)
+      days&.positive? ? days : nil
     end
 
     def subscribe_to(pattern)

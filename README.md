@@ -209,6 +209,8 @@ StandardAudit.configure do |config|
   config.anonymizable_metadata_keys = %i[email name ip_address]
 
   # -- Retention (schedule StandardAudit::CleanupJob to enforce) --
+  # Defaults from STANDARD_AUDIT_RETENTION_DAYS (see Retention below); set here
+  # to override per app. Leave unset for infinite retention.
   config.retention_days = 90
 end
 ```
@@ -338,6 +340,45 @@ File.write("export.json", JSON.pretty_generate(data))
 ```
 
 Returns a hash with `subject`, `exported_at`, `total_records`, and a `records` array.
+
+## Retention
+
+`config.retention_days` controls how long audit logs are kept. It is only
+enforced when you actually run cleanup (the `StandardAudit::CleanupJob` or the
+`standard_audit:cleanup` rake task) — setting it alone deletes nothing.
+
+It defaults from the `STANDARD_AUDIT_RETENTION_DAYS` environment variable, so a
+deployment can opt into a retention window without a code change:
+
+```bash
+STANDARD_AUDIT_RETENTION_DAYS=365   # keep 365 days
+# unset / blank / 0 / negative / non-numeric => nil => infinite retention
+```
+
+Infinite retention (the default) is the compliance-safe behavior: nothing is
+ever auto-deleted. For financial/legal domains that is usually what you want;
+enabling a finite window is a deliberate decision.
+
+### Production retention warning (StandardHealth)
+
+`StandardAudit::Checks::Retention` is a [StandardHealth](https://github.com/rarebit-one/standard_health)-compatible
+check that flags unbounded retention **on production deployments** as an
+advisory. Register it (non-critical) in `config/initializers/standard_health.rb`:
+
+```ruby
+StandardHealth.configure do |c|
+  c.register_check :audit_retention,
+                   StandardAudit::Checks::Retention,
+                   critical: false
+end
+```
+
+When `APP_ENVIRONMENT == "production"` (falling back to `Rails.env.production?`
+when that var is unset — so staging is not flagged) and `retention_days` is nil,
+the check returns `:warn`. That rolls `GET /health/ready` up to `:degraded`,
+which is **still HTTP 200** — it surfaces the advisory in the readiness JSON
+without failing the probe or blocking a deploy. The check is duck-typed and has
+no hard dependency on `standard_health`.
 
 ## Rake Tasks
 
