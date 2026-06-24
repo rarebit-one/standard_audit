@@ -29,10 +29,6 @@ RSpec.describe StandardAudit::Configuration do
       expect(config.anonymizable_metadata_keys).to eq(%i[email name ip_address])
     end
 
-    it "defaults retention_days to nil" do
-      expect(config.retention_days).to be_nil
-    end
-
     it "defaults metadata_builder to nil" do
       expect(config.metadata_builder).to be_nil
     end
@@ -50,6 +46,54 @@ RSpec.describe StandardAudit::Configuration do
     it "has default scope_extractor" do
       expect(config.scope_extractor).to be_a(Proc)
       expect(config.scope_extractor.call({ scope: :test })).to eq(:test)
+    end
+  end
+
+  describe "retention_days default from STANDARD_AUDIT_RETENTION_DAYS" do
+    around do |example|
+      original = ENV["STANDARD_AUDIT_RETENTION_DAYS"]
+      example.run
+      if original.nil?
+        ENV.delete("STANDARD_AUDIT_RETENTION_DAYS")
+      else
+        ENV["STANDARD_AUDIT_RETENTION_DAYS"] = original
+      end
+    end
+
+    def retention_for(value)
+      if value.nil?
+        ENV.delete("STANDARD_AUDIT_RETENTION_DAYS")
+      else
+        ENV["STANDARD_AUDIT_RETENTION_DAYS"] = value
+      end
+      described_class.new.retention_days
+    end
+
+    it "is nil (infinite) when unset" do
+      expect(retention_for(nil)).to be_nil
+    end
+
+    it "is nil when blank" do
+      expect(retention_for("   ")).to be_nil
+    end
+
+    it "parses a positive integer" do
+      expect(retention_for("90")).to eq(90)
+    end
+
+    it "is nil for zero and negatives" do
+      expect(retention_for("0")).to be_nil
+      expect(retention_for("-5")).to be_nil
+    end
+
+    it "is nil for non-numeric values" do
+      expect(retention_for("forever")).to be_nil
+    end
+
+    it "stays overridable on the instance" do
+      retention_for(nil)
+      config.retention_days = 365
+      expect(config.retention_days).to eq(365)
     end
   end
 

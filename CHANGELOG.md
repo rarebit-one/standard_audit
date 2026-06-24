@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-24
+
+### Added
+
+- `config.retention_days` now defaults from the `STANDARD_AUDIT_RETENTION_DAYS` environment variable, so a deployment can opt into a retention window without a code change. Unset/blank/zero/negative/non-numeric resolves to `nil` (infinite retention — the compliance-safe default that never auto-deletes). Host apps can still override `config.retention_days` in their initializer.
+- `StandardAudit::Checks::Retention` — a StandardHealth-compatible (duck-typed, no hard dependency) readiness check that flags unbounded retention on **production** deployments. Register it non-critical in `config/initializers/standard_health.rb`:
+  ```ruby
+  c.register_check :audit_retention, StandardAudit::Checks::Retention, critical: false
+  ```
+  When `APP_ENVIRONMENT == "production"` (falling back to `Rails.env.production?` so staging is not flagged) and `retention_days` is nil, it returns `:warn`, rolling `GET /health/ready` to `:degraded` — still HTTP 200, so it surfaces the advisory without failing the probe or blocking a deploy.
+
 ## [0.5.0] - 2026-04-29
 
 ### Changed

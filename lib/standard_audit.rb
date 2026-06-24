@@ -5,6 +5,7 @@ require "standard_audit/subscriber"
 require "standard_audit/event_subscriber"
 require "standard_audit/auditable"
 require "standard_audit/audit_scope"
+require "standard_audit/checks/retention"
 
 module StandardAudit
   # Metadata keys owned internally by StandardAudit. Never filtered by
