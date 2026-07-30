@@ -16,3 +16,27 @@ jobs:
     with:
       ruby-versions: '["4.0.0","4.0.1","4.0.2","4.0.3","4.0.4"]'
       lint-command: bin/rubocop -f github
+      # `extra-lint-commands` is the reusable workflow's ONLY hook for extra
+      # steps, and this gem was passing just `lint-command` — so bundler-audit
+      # ran nowhere. It is a dev dependency here (Gemfile:21) and lefthook's
+      # pre-push runs brakeman but not the audit, so nothing checked the
+      # lockfile at any point.
+      #
+      # That gap is not hypothetical: standard_singpass had the identical
+      # omission and accumulated 22 advisories across 7 gems — two of them High
+      # severity — through a long run of green builds. It matters more here than
+      # in most of the family because this gem COMMITS its Gemfile.lock, so a
+      # vulnerable version can sit pinned indefinitely. The gems that gitignore
+      # their lockfile re-resolve every CI run and drift back to patched
+      # versions on their own.
+      #
+      # `--update` is deliberate: a newly published advisory can turn CI red
+      # with no code change. For a security gate that is the point — a red build
+      # you did not cause beats a stale advisory DB passing quietly.
+      # brakeman is added alongside for the same reason: it ran only in
+      # lefthook's pre-push, which a `LEFTHOOK=0` push or a bot-authored PR
+      # skips entirely. CI is the gate that always runs. (Verified clean —
+      # 0 warnings — so this does not turn the build red on arrival.)
+      extra-lint-commands: |
+        bundle exec brakeman --no-pager --force
+        bundle exec bundler-audit --update
