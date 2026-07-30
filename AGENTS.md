@@ -47,7 +47,6 @@ standard_audit/
 │   ├── engine.rb                     # Wires subscribers at boot
 │   ├── event_subscriber.rb           # Rails.event subscriber (8.1+)
 │   ├── subscriber.rb                 # AS::Notifications subscriber
-│   ├── presets/standard_id.rb        # Preset for StandardId events
 │   ├── rspec.rb                      # RSpec auto-cleanup plugin
 │   └── version.rb
 ├── lib/generators/standard_audit/
@@ -207,7 +206,7 @@ serialising actor/target/scope as GID strings and resolving them inside
 | File                                                | Purpose                                         |
 |-----------------------------------------------------|-------------------------------------------------|
 | `lib/standard_audit.rb`                             | Public API: `record`, `batch`, `configure`      |
-| `lib/standard_audit/configuration.rb`               | Configuration object + presets dispatcher       |
+| `lib/standard_audit/configuration.rb`               | Configuration object                            |
 | `lib/standard_audit/engine.rb`                      | Wires subscribers at boot                       |
 | `lib/standard_audit/subscriber.rb`                  | `AS::Notifications` subscriber                  |
 | `lib/standard_audit/event_subscriber.rb`            | `Rails.event` subscriber (8.1+)                 |
