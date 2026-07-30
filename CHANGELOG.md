@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-30
+
 ### Added
 
 - **`previous_checksum` — every row now records the row it was appended to.** New nullable column; run `rails generate standard_audit:add_previous_checksum && rails db:migrate` to add it. The install migration includes it for new hosts, along with a composite `(created_at, id)` index for the verification walk.
