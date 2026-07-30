@@ -153,10 +153,8 @@ module StandardAudit
 
     def flush_batch(buffer)
       now = Time.current
-      previous_checksum = StandardAudit::AuditLog
-        .order(created_at: :desc, id: :desc)
-        .limit(1)
-        .pick(:checksum)
+      records_parent = StandardAudit::AuditLog.chain_parent_column?
+      previous_checksum = StandardAudit::AuditLog.chain_tip_checksum
 
       # Generate sorted UUIDs to ensure batch ordering matches id ordering.
       # UUIDv7 within the same millisecond can have non-monotonic lower bits;
@@ -175,6 +173,7 @@ module StandardAudit
           row.stringify_keys,
           previous_checksum: previous_checksum
         )
+        row[:previous_checksum] = previous_checksum if records_parent
         row[:checksum] = checksum
         previous_checksum = checksum
         row

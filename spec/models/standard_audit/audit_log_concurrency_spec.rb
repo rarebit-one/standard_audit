@@ -24,10 +24,10 @@ require "rails_helper"
 # uncommitted row — and then both commit.
 #
 # This PROVES:
-#   * the append has no defence against two writers observing the same tip;
-#   * the resulting rows are persisted happily and `verify_chain` then reports
-#     the later ones as failures, in the exact shape measured on production
-#     (N simultaneous writers off one tip => N-1 failures, which is why three
+#   * two writers can observe the same tip and both persist;
+#   * what `verify_chain` then makes of it. Before 0.8.0 it reported the later
+#     writers as failures, in the exact shape measured on production (N
+#     simultaneous writers off one tip => N-1 failures, which is why three
 #     events from a single OTP request failed in identical counts).
 #
 # This does NOT PROVE:
@@ -36,12 +36,10 @@ require "rails_helper"
 #     measurements in the issue, not something this suite can demonstrate
 #     without a Postgres-backed dummy app (see the issue for the measurement).
 #
-# The failing examples are marked `pending` so CI stays green while the defect
-# is unfixed. RSpec fails the run if a pending example starts passing, so the
-# fix flips these to real assertions rather than leaving them to rot.
+# These examples were `pending` when they were written, against the unfixed
+# gem. They pass as of 0.8.0, which records the parent each row was signed
+# against instead of assuming the sequence never forks.
 RSpec.describe StandardAudit::AuditLog, "concurrent appends" do
-  FORK_PENDING = "concurrent appends fork the chain (fundbright/delivery-ops#433)".freeze
-
   before { StandardAudit.instance_variable_set(:@configuration, nil) }
 
   after { StandardAudit.instance_variable_set(:@configuration, nil) }
@@ -55,33 +53,6 @@ RSpec.describe StandardAudit::AuditLog, "concurrent appends" do
     expect(StandardAudit.config.before_checksum_hooks).to be_empty
   end
 
-  # Sleeps keep UUIDv7 ids and created_at timestamps monotonic, so the order
-  # `verify_chain` walks is the order the rows were written and the examples
-  # are deterministic.
-  def create_log(event_type, **attrs)
-    sleep(0.002)
-    StandardAudit::AuditLog.create!(event_type: event_type, occurred_at: Time.current, **attrs)
-  end
-
-  # Builds N records that each ran the model's before_create chain against the
-  # same committed snapshot — what N concurrent transactions do — without
-  # persisting any of them yet.
-  def build_concurrent_writers(*event_types)
-    event_types.map do |event_type|
-      sleep(0.002)
-      StandardAudit::AuditLog.new(event_type: event_type, occurred_at: Time.current).tap do |log|
-        log.run_callbacks(:create) { nil }
-      end
-    end
-  end
-
-  def commit(writers)
-    writers.each do |writer|
-      sleep(0.002)
-      writer.save!
-    end
-  end
-
   describe "two writers reading the same chain tip" do
     it "signs both rows against the same predecessor" do
       tip = create_log("committed.tip")
@@ -93,8 +64,6 @@ RSpec.describe StandardAudit::AuditLog, "concurrent appends" do
     end
 
     it "leaves a chain that still verifies" do
-      pending FORK_PENDING
-
       create_log("committed.tip")
       commit(build_concurrent_writers("concurrent.first", "concurrent.second"))
 
@@ -106,8 +75,6 @@ RSpec.describe StandardAudit::AuditLog, "concurrent appends" do
     end
 
     it "leaves a chain that still verifies when the table starts empty" do
-      pending FORK_PENDING
-
       commit(build_concurrent_writers("genesis.first", "genesis.second"))
 
       result = described_class.verify_chain
@@ -122,8 +89,6 @@ RSpec.describe StandardAudit::AuditLog, "concurrent appends" do
     # The production signature: three audit events fired in immediate
     # succession within one request failed in identical counts (635 each).
     it "leaves a chain that still verifies" do
-      pending FORK_PENDING
-
       create_log("committed.tip")
       commit(build_concurrent_writers("otp.requested", "otp.generated", "otp.sent"))
 
