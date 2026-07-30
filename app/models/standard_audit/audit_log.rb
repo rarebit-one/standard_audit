@@ -184,28 +184,26 @@ module StandardAudit
       verified = 0
       failures = []
 
-      relation.in_batches(of: batch_size) do |batch|
-        batch.order(created_at: :asc, id: :asc).each do |record|
-          if record.checksum.blank?
-            previous_checksum = nil
-            next
-          end
-
-          expected = record.compute_checksum_value(previous_checksum: previous_checksum)
-
-          if record.checksum != expected
-            failures << {
-              id: record.id,
-              event_type: record.event_type,
-              created_at: record.created_at,
-              expected: expected,
-              actual: record.checksum
-            }
-          end
-
-          verified += 1
-          previous_checksum = record.checksum
+      each_in_chain_order(relation, batch_size: batch_size) do |record|
+        if record.checksum.blank?
+          previous_checksum = nil
+          next
         end
+
+        expected = record.compute_checksum_value(previous_checksum: previous_checksum)
+
+        if record.checksum != expected
+          failures << {
+            id: record.id,
+            event_type: record.event_type,
+            created_at: record.created_at,
+            expected: expected,
+            actual: record.checksum
+          }
+        end
+
+        verified += 1
+        previous_checksum = record.checksum
       end
 
       { valid: failures.empty?, verified: verified, failures: failures }
@@ -217,26 +215,64 @@ module StandardAudit
       previous_checksum = nil
       count = 0
 
-      in_batches(of: batch_size) do |batch|
-        batch.order(created_at: :asc, id: :asc).each do |record|
-          if record.checksum.present?
-            previous_checksum = record.checksum
-            next
-          end
-
-          new_checksum = compute_checksum_value(
-            record.attributes.slice(*CHECKSUM_FIELDS),
-            previous_checksum: previous_checksum
-          )
-          record.update_columns(checksum: new_checksum)
-
-          previous_checksum = new_checksum
-          count += 1
+      each_in_chain_order(all, batch_size: batch_size) do |record|
+        if record.checksum.present?
+          previous_checksum = record.checksum
+          next
         end
+
+        new_checksum = compute_checksum_value(
+          record.attributes.slice(*CHECKSUM_FIELDS),
+          previous_checksum: previous_checksum
+        )
+        record.update_columns(checksum: new_checksum)
+
+        previous_checksum = new_checksum
+        count += 1
       end
 
       count
     end
+
+    # Yields every record of `relation` in true (created_at, id) order, loading
+    # at most `batch_size` rows at a time via a keyset cursor.
+    #
+    # `in_batches` cannot do this, and used to be used here: it paginates by
+    # PRIMARY KEY range and applies any ordering only *within* each batch, so
+    # the global sequence it yields is a concatenation of id-ranges, each
+    # internally time-sorted. With the UUIDv7 ids `assign_uuid` generates that
+    # usually coincides with insertion order, which is why it went unnoticed —
+    # but it is wrong for any host that assigns ids differently, backfills rows
+    # with an explicit created_at, or has clock skew between writers. The chain
+    # is an ordering claim, so a verifier that walks a different order than the
+    # one it documents cannot be trusted to prove or disprove anything about it.
+    #
+    # The cursor predicate assumes created_at is NOT NULL, which the install
+    # migration's `t.timestamps` guarantees. A NULL created_at would compare as
+    # NULL and end the walk early rather than loop forever.
+    def self.each_in_chain_order(relation, batch_size: 1000)
+      cursor = nil
+
+      loop do
+        page = relation.reorder(created_at: :asc, id: :asc).limit(batch_size)
+
+        if cursor
+          page = page.where(
+            "created_at > :created_at OR (created_at = :created_at AND id > :id)",
+            created_at: cursor.first, id: cursor.last
+          )
+        end
+
+        records = page.to_a
+        break if records.empty?
+
+        records.each { |record| yield record }
+        break if records.size < batch_size
+
+        cursor = [records.last.created_at, records.last.id]
+      end
+    end
+    private_class_method :each_in_chain_order
 
     private
 
