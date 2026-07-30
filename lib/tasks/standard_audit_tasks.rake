@@ -79,6 +79,47 @@ namespace :standard_audit do
     puts "Backfilled checksums for #{count} audit log records"
   end
 
+  namespace :sensitive_keys do
+    desc "Report which historical metadata keys a redaction rule would strip (read-only)"
+    task :dry_run, [:pattern] => :environment do |_t, args|
+      # Audit rows are append-only, so a redaction rule that swallows real
+      # content cannot be undone. This reads the rows you already have and
+      # reports, per key, what the rule would have stripped.
+      #
+      #   rake standard_audit:sensitive_keys:dry_run
+      #   rake "standard_audit:sensitive_keys:dry_run[secret]"
+      #   NESTED=1 rake "standard_audit:sensitive_keys:dry_run[secret|token]"
+      #
+      # The argument is a Regexp source, matched case-insensitively, and is
+      # applied *in addition to* the app's configured sensitive_keys.
+      # NESTED=1/0 overrides config.filter_nested_metadata for the run.
+      pattern = args[:pattern].presence || ENV["PATTERN"].presence
+      patterns = StandardAudit.config.sensitive_key_patterns.dup
+      patterns << Regexp.new(pattern, Regexp::IGNORECASE) if pattern
+
+      nested =
+        case ENV["NESTED"]
+        when nil, "" then nil
+        when "0", "false" then false
+        else true
+        end
+
+      report = StandardAudit::SensitiveKeysDryRun.call(
+        sensitive_key_patterns: patterns,
+        nested: nested,
+        batch_size: (ENV["BATCH_SIZE"] || 1000).to_i
+      )
+
+      puts "StandardAudit sensitive-key dry run"
+      puts "==================================="
+      puts "Candidate pattern: #{pattern ? Regexp.new(pattern, Regexp::IGNORECASE).inspect : '(none — reporting current config)'}"
+      puts ""
+      puts report
+      puts ""
+      puts "Nothing was written. Rows are append-only; a rule you enable applies only to future writes."
+    end
+  end
+
   desc "Export audit logs for a specific actor (GDPR right to access)"
   task :export_actor, [:actor_gid, :output] => :environment do |_t, args|
     raise "actor_gid is required" unless args[:actor_gid].present?

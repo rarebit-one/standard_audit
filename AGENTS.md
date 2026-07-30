@@ -46,6 +46,7 @@ standard_audit/
 │   ├── configuration.rb              # Configuration object
 │   ├── engine.rb                     # Wires subscribers at boot
 │   ├── metadata_filter.rb            # Sensitive-key redaction (both write paths)
+│   ├── sensitive_keys_dry_run.rb     # Read-only "what would this rule strip?"
 │   ├── reference_preloading.rb       # Batch actor/target/scope GID resolution
 │   ├── event_subscriber.rb           # Rails.event subscriber (8.1+)
 │   ├── subscriber.rb                 # AS::Notifications subscriber
@@ -231,13 +232,31 @@ serialising actor/target/scope as GID strings and resolving them inside
   cannot filter raises rather than being written unredacted.
 - `RESERVED_METADATA_KEYS = %w[_tags _source]` are never filtered, even if
   the consumer adds them to `sensitive_keys`.
-- Matching is **exact, on the key name**, string/symbol-insensitive. It is not
-  a substring match, and must not become one by default: `input_tokens` /
-  `output_tokens` (live LLM cost accounting), `token_digest` (rendered in a
-  staff audit UI), `password_reset_sent_at`, `authorization_endpoint` and
-  `onepassword` are all real audit content across the estate that substring
-  matching would silently strip. Audit rows are append-only, so it cannot be
-  undone.
+- Matching is **exact, on the key name**, string/symbol-insensitive, plus any
+  Regexp in `config.sensitive_key_patterns`. `config.sensitive_key_exceptions`
+  (exact names or Regexps) always wins.
+- **There is no substring matching mode, and do not add one.** Against the
+  default key list, substring matching strips real audit content across the
+  estate: `input_tokens` / `output_tokens` (live LLM cost accounting in
+  luminality and sidekick), `token_digest` (rendered in luminality's staff
+  audit UI), `password_reset_sent_at`, `authorization_endpoint`, and even
+  `onepassword`. **Audit rows are append-only, so it cannot be undone** — the
+  content is simply never written from then on. `sensitive_key_patterns` is the
+  supported tool: `/secret/i` solves the motivating `client_secret` case, and
+  it is opt-in per app.
+- **Nested metadata is unfiltered unless `config.filter_nested_metadata` is
+  true.** By default `metadata: { stripe: { client_secret: … } }` is written
+  intact on *both* write paths, even under exact matching. Turning it on
+  descends into nested Hashes and Hashes inside Arrays. Reserved keys are
+  preserved *and their subtree is never descended into, at any depth* —
+  `_tags` / `_source` are gem-owned, not host payload.
+- Before enabling any rule, run it against real rows:
+  `rake "standard_audit:sensitive_keys:dry_run[secret]"` (`NESTED=1` to model
+  nested filtering). It reports per key what would be stripped, what would be
+  kept, and nested matches that survive because nested filtering is off. Keys
+  are extracted **in Ruby, never with `jsonb_object_keys`** — the install
+  template ships jsonb + GIN but the gem stays backend-neutral (the dummy is
+  SQLite).
 - Default `sensitive_keys` cover password / token / secret / api_key /
   access_token / refresh_token / private_key / certificate_chain / ssn /
   credit_card / authorization. The `:authorization` key filters HTTP
@@ -257,6 +276,7 @@ serialising actor/target/scope as GID strings and resolving them inside
 | `lib/standard_audit/configuration.rb`               | Configuration object                            |
 | `lib/standard_audit/engine.rb`                      | Wires subscribers at boot                       |
 | `lib/standard_audit/metadata_filter.rb`             | Sensitive-key redaction, shared by both paths   |
+| `lib/standard_audit/sensitive_keys_dry_run.rb`      | Read-only redaction-rule dry run                |
 | `lib/standard_audit/subscriber.rb`                  | `AS::Notifications` subscriber                  |
 | `lib/standard_audit/event_subscriber.rb`            | `Rails.event` subscriber (8.1+)                 |
 | `lib/standard_audit/reference_preloading.rb`        | Batch actor/target/scope GID resolution + memo   |

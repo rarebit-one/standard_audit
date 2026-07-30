@@ -20,10 +20,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Nested metadata was never redacted on either write path.** `metadata: { stripe: { client_secret: … } }` was written intact even under exact matching — a larger real leak than the top-level case. Opt in with `config.filter_nested_metadata = true` (default `false`, so 0.6.0 behaviour is preserved); redaction then descends into nested Hashes and Hashes inside Arrays. `RESERVED_METADATA_KEYS` (`_tags`, `_source`) are preserved *and their subtree is never descended into, at every depth* — they are gem-owned, and `event_subscriber.rb` sets them after building metadata.
 - **The two write paths applied different sensitive-key filters.** `StandardAudit.record` and `StandardAudit::Subscriber#extract_metadata` each carried an independent copy of the redaction logic, and they had already diverged: the subscriber copy did not subtract `RESERVED_METADATA_KEYS`, so an app that added `:_tags` or `:_source` to `sensitive_keys` had the reserved key preserved on the `record` path and stripped on the `ActiveSupport::Notifications` path. Both now call the single `StandardAudit::MetadataFilter`, and the divergence is resolved in favour of `record`'s behaviour — reserved keys can never be filtered on either path. Parity is driven from one shared example (`spec/support/shared_examples/metadata_filtering.rb`), so a future divergence fails the suite rather than shipping.
 
 ### Added
 
+- **`config.sensitive_key_patterns`** (Array of Regexp, always applied, default `[]`) — the supported way to catch a family of keys. Stripe's `client_secret` slipping past the exact-match `:secret` is solved by `/secret/i`.
+
+  **There is deliberately no substring matching mode**, and one should not be added. Against the current default key list, substring matching strips real audit content across the estate: `input_tokens` / `output_tokens` (live LLM cost accounting in luminality and sidekick), `token_digest` (rendered in luminality's staff audit UI), `password_reset_sent_at`, `authorization_endpoint`, even `onepassword`. Audit rows are append-only, so it cannot be undone — the content is simply never written from then on. Patterns are opt-in, per-app, and checkable in advance.
+- **`config.sensitive_key_exceptions`** (Array of exact names or Regexps, default `[]`) — never redacted, even when `sensitive_keys` or a pattern matches. Lets an app adopt `[/token/i]` while keeping `input_tokens` / `output_tokens`.
+- **`rake standard_audit:sensitive_keys:dry_run`** — read-only. Reports, per metadata key, what a candidate rule *would* have stripped from the rows you already have, what it would keep, and any nested matches that survive because `filter_nested_metadata` is off. Turns "is this rule safe for my app?" into a command rather than a guess, which matters precisely because the rows are append-only.
+  ```bash
+  bin/rails standard_audit:sensitive_keys:dry_run                 # current config
+  bin/rails "standard_audit:sensitive_keys:dry_run[secret]"       # candidate pattern
+  NESTED=1 bin/rails "standard_audit:sensitive_keys:dry_run[secret|token]"
+  ```
+  Backed by `StandardAudit::SensitiveKeysDryRun.call(...)`, which extracts keys **in Ruby** rather than with `jsonb_object_keys` so it stays backend-neutral.
 - `StandardAudit::MetadataFilter` — `MetadataFilter.call(metadata, config:)` filters metadata; `MetadataFilter.new.filter?(key)` answers the same question for a single key without writing a row. Matching stays **exact on the key name** (string/symbol insensitive), unchanged from 0.6.0. Anything hash-like is filtered (so `ActionController::Parameters` is redacted, not waved through because it isn't a `Hash`); `nil` passes; anything else raises `MetadataFilter::UnfilterableMetadataError` rather than writing unfiltered content to an append-only row.
 
 ### Notes
