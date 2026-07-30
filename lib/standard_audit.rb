@@ -1,6 +1,7 @@
 require "standard_audit/version"
 require "standard_audit/engine"
 require "standard_audit/configuration"
+require "standard_audit/metadata_filter"
 require "standard_audit/subscriber"
 require "standard_audit/event_subscriber"
 require "standard_audit/reference_preloading"
@@ -27,10 +28,9 @@ module StandardAudit
 
       actor ||= config.current_actor_resolver.call
 
-      # Filter sensitive keys. `_tags` and `_source` are reserved internal
-      # metadata keys owned by EventSubscriber and are never stripped.
-      sensitive = config.sensitive_keys.map(&:to_s) - RESERVED_METADATA_KEYS
-      filtered_metadata = metadata.reject { |k, _| sensitive.include?(k.to_s) }
+      # Redaction lives in MetadataFilter, shared with Subscriber, so the two
+      # write paths cannot drift apart.
+      filtered_metadata = MetadataFilter.call(metadata, config: config)
 
       attrs = {
         event_type: event_type,

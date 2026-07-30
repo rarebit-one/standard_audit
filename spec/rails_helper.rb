@@ -8,6 +8,8 @@ require "shoulda/matchers"
 # For in-memory SQLite, run migrations directly
 ActiveRecord::MigrationContext.new(Rails.root.join("db/migrate")).migrate
 
+Dir[File.join(__dir__, "support/**/*.rb")].sort.each { |file| require file }
+
 RSpec.configure do |config|
   config.use_transactional_fixtures = true
   config.filter_rails_from_backtrace!
