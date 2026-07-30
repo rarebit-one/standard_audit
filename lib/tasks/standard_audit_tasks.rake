@@ -63,14 +63,32 @@ namespace :standard_audit do
     puts "============================="
     puts "Records verified: #{result[:verified]}"
     puts "Chain valid: #{result[:valid]}"
+    puts "Forked links recovered: #{result[:recovered]}"
 
     if result[:failures].any?
-      puts "\nTampered records detected: #{result[:failures].size}"
+      puts "\nUnverifiable records detected: #{result[:failures].size}"
       result[:failures].each do |failure|
-        puts "  #{failure[:id]} (#{failure[:event_type]}) at #{failure[:created_at]}"
+        puts "  #{failure[:id]} (#{failure[:event_type]}) at #{failure[:created_at]} — #{failure[:reason]}"
       end
       abort "Chain verification failed"
     end
+  end
+
+  desc "Record the parent digest each existing row was signed against (never re-signs)"
+  task relink_checksums: :environment do
+    unless StandardAudit::AuditLog.chain_parent_column?
+      abort "audit_logs has no previous_checksum column — run `rails generate standard_audit:add_previous_checksum` first"
+    end
+
+    result = StandardAudit::AuditLog.relink_checksums!
+
+    puts "Relinked: #{result[:relinked]}"
+    puts "Left as-is (already linked, or a segment root): #{result[:skipped]}"
+    puts "Unresolved: #{result[:unresolved]}"
+    puts ""
+    puts "No checksum was rewritten. A parent is recorded only when it reproduces"
+    puts "the digest the row has held since it was written; unresolved rows keep"
+    puts "failing verification, which is the point."
   end
 
   desc "Backfill checksums for records that don't have them"

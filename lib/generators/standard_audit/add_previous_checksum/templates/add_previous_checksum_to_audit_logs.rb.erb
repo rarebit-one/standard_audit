@@ -1,0 +1,23 @@
+class AddPreviousChecksumToAuditLogs < ActiveRecord::Migration[<%= ActiveRecord::Migration.current_version %>]
+  def change
+    # On PostgreSQL with a large audit_logs table, add
+    # `disable_ddl_transaction!` above and pass `algorithm: :concurrently` to
+    # the add_index calls — StrongMigrations will ask for it.
+    #
+    # Nullable and index-only: no data is rewritten. Existing rows keep a NULL
+    # parent and are verified by position and parent recovery, exactly as they
+    # are today. Run `rake standard_audit:relink_checksums` afterwards to
+    # record the parent each existing row was actually signed against.
+    add_column :audit_logs, :previous_checksum, :string, limit: 64
+    # Not used by the gem itself: verification reads previous_checksum off rows
+    # it has already loaded. It is here for forensics — "what forked off this
+    # row?" — which is the question you ask once verification flags something.
+    add_index :audit_logs, :previous_checksum
+    # verify_chain / backfill_checksums! walk the table with a keyset cursor
+    # ordered by (created_at, id).
+    add_index :audit_logs, [:created_at, :id] unless index_exists?(:audit_logs, [:created_at, :id])
+    # verify_chain looks a declared parent up by digest when it falls outside
+    # the in-memory recovery window — the path that reports a removed row.
+    add_index :audit_logs, :checksum unless index_exists?(:audit_logs, :checksum)
+  end
+end

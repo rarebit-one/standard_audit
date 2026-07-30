@@ -406,9 +406,92 @@ which is **still HTTP 200** — it surfaces the advisory in the readiness JSON
 without failing the probe or blocking a deploy. The check is duck-typed and has
 no hard dependency on `standard_health`.
 
+## Chain Integrity
+
+Every row carries a SHA-256 `checksum` over its own fields **and the digest of
+the row it was appended to**, so editing a row in place invalidates it. Each row
+also records that parent explicitly in `previous_checksum`.
+
+### The log is a DAG, not a strict line
+
+A writer reads the current tip and links to it. That read is deliberately
+unlocked, so two concurrent transactions — two Puma threads, a web request and a
+job — can read the same tip and the sequence forks. **That is normal for a
+multi-process writer, and it is not an integrity failure.** Forcing a strict
+line would mean holding a lock until the enclosing business transaction commits
+(a row is invisible to other writers until then, so releasing earlier reopens
+the race), which serialises every audited request behind one mutex.
+
+Storing the parent is what keeps a forked log verifiable: every row is checked
+against the exact digest it signed, whether or not it is the walk's predecessor.
+`previous_checksum` needs no protection of its own — it is an input to the row's
+own digest, so editing it invalidates the row.
+
+```ruby
+result = StandardAudit::AuditLog.verify_chain
+# => { valid: true, verified: 5577, recovered: 0, failures: [] }
+```
+
+- `failures` carries `reason: :digest_mismatch` (the row's fields no longer
+  produce its digest) or `reason: :missing_parent` (the row it was appended to
+  is no longer in the log). Retention pruning does not trip `:missing_parent`:
+  if the walk opens on a row whose parent is already gone, that parent digest
+  is exempt wherever else it appears — a pruned row can have several children.
+  A removal from the *middle* is still reported. One caveat:
+  `standard_audit:cleanup` prunes by `occurred_at` while the walk orders by
+  `created_at`, so rows whose two timestamps disagree can leave a hole rather
+  than a pruned start, and a hole is reported — truthfully, since rows really
+  are missing.
+- `recovered` counts rows with no `previous_checksum` whose parent had to be
+  found by searching back through recent digests — see below.
+- `verify_chain(scope: org)` skips the missing-parent check, because the log is
+  global and a scoped row's parent usually belongs to another scope.
+
+What this deliberately does **not** claim: that the log is in a single total
+order, or that no row was inserted. A concurrent append and an inserted row look
+alike, so a design that tolerates the first cannot detect the second. The
+previous strict-line reading did not actually detect insertions either — it
+reported every concurrent append as tampering, which on one production log meant
+67% of rows red and any real signal lost in the noise.
+
+### Rows written before 0.8.0
+
+They have no `previous_checksum`. Verification falls back to the preceding row
+in the walk and, failing that, searches back through the last `recovery_window`
+(default 256) digests for the one that reproduces the row's checksum — which
+recovers the true parent of a row that forked, **without re-signing anything**.
+This does not weaken tamper detection: a row whose fields were altered
+reproduces no candidate's digest. Pass `strict: true` to skip the search and see
+every fork as a failure.
+
+To make that permanent, add the column and record what each row was actually
+signed against:
+
+```bash
+rails generate standard_audit:add_previous_checksum
+rails db:migrate
+rake standard_audit:relink_checksums
+```
+
+`relink_checksums` never rewrites a `checksum`. It fills in the previously-empty
+`previous_checksum` only when that value reproduces the digest the row has held
+since it was written, so it adds no attestation the rows did not already carry.
+Rows it cannot resolve are reported as `unresolved` and keep failing
+verification — which is the point.
+
+**Do not run `backfill_checksums!` to make a red `verify_chain` go green.** It
+re-signs rows from their current contents, so it attests only that a script ran.
+It is for rows that never had a checksum at all (pre-feature data).
+
 ## Rake Tasks
 
 ```bash
+# Verify chain integrity (exits non-zero on failures)
+rake standard_audit:verify
+
+# Record the parent digest each existing row was signed against
+rake standard_audit:relink_checksums
+
 # Delete logs older than N days (default: retention_days config or 90)
 rake standard_audit:cleanup[180]
 

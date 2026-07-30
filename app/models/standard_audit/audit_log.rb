@@ -171,43 +171,210 @@ module StandardAudit
       OpenSSL::Digest::SHA256.hexdigest(canonical)
     end
 
-    # Verifies the integrity of the audit log chain. Returns a result hash with
-    # :valid (boolean), :verified (count), and :failures (array of hashes).
+    # The checksum of the most recent row — the node a new row links to.
+    def self.chain_tip_checksum
+      order(created_at: :desc, id: :desc).limit(1).pick(:checksum)
+    end
+
+    # True when the table carries the `previous_checksum` column, i.e. the host
+    # has run the `standard_audit:add_previous_checksum` migration. Rows written
+    # without it are verified by position and parent recovery instead, so the
+    # gem keeps working unmigrated.
+    def self.chain_parent_column?
+      column_names.include?("previous_checksum")
+    end
+
+    # Verifies the integrity of the audit log. Returns a result hash with
+    # :valid (boolean), :verified (count), :recovered (count) and :failures
+    # (array of hashes carrying :id, :event_type, :created_at, :expected,
+    # :actual and :reason).
     #
     # Records are processed in (created_at, id) order. Records without a
-    # checksum (pre-feature data) reset the chain — the next checksummed
-    # record starts a new independent chain segment.
-    def self.verify_chain(scope: nil, batch_size: 1000)
+    # checksum (pre-feature data) reset the walk — the next checksummed record
+    # starts a new independent segment.
+    #
+    # The log is a DAG, not a strict line. Concurrent writers link to whichever
+    # node was the tip when they read it, so two rows can share a parent and
+    # the sequence forks. Every row is still verified against the exact digest
+    # it signed, in one of two ways:
+    #
+    #   * `previous_checksum` present (written by 0.8+ on a migrated host): the
+    #     parent the writer asserts. It is covered by this row's own digest, so
+    #     it cannot be edited to excuse a tampered row.
+    #   * `previous_checksum` NULL (pre-0.8 rows, or an unmigrated host): the
+    #     preceding row in the walk, and — unless `strict:` — a search back
+    #     through the last `recovery_window` digests (and finally "no parent at
+    #     all", for a row written against an empty table) for the one that
+    #     actually reproduces this row's checksum. That recovers the true parent
+    #     of a forked row without re-signing anything. It does not weaken tamper
+    #     detection: a row whose fields were altered reproduces no candidate's
+    #     digest, so it still fails.
+    #
+    # A row whose parent digest is absent from the log is reported with
+    # `reason: :missing_parent` — a row was removed. Two exemptions:
+    #
+    #   * `scope:` — the log is global, so a scoped row's parent usually
+    #     belongs to another scope and is absent for an innocent reason.
+    #   * a pruned start. If the walk *opens* on a row whose parent is already
+    #     gone, the log has had its start removed (retention cleanup). That
+    #     parent digest is then exempt wherever else it appears, because a
+    #     pruned row can have several children — which is exactly what a
+    #     concurrent append leaves behind. Removing a row from the middle is
+    #     still reported: its digest is not the one the walk opened on.
+    #
+    # `standard_audit:cleanup` prunes by `occurred_at` while the walk orders by
+    # `created_at`. Rows whose two timestamps disagree (a backdated
+    # `occurred_at`) can leave a hole rather than a prefix, and a hole is
+    # reported — truthfully, since rows really are missing.
+    def self.verify_chain(scope: nil, batch_size: 1000, recovery_window: 256, strict: false)
       relation = scope ? where(scope_gid: scope.to_global_id.to_s) : all
+      check_parents = scope.nil?
+      declared_parents = chain_parent_column?
 
       previous_checksum = nil
       verified = 0
+      recovered = 0
       failures = []
+      window = []
+      first_row = true
+      pruned_parents = []
 
       each_in_chain_order(relation, batch_size: batch_size) do |record|
         if record.checksum.blank?
           previous_checksum = nil
+          window.clear
           next
         end
 
-        expected = record.compute_checksum_value(previous_checksum: previous_checksum)
+        verified += 1
+        declared = record.previous_checksum if declared_parents
 
-        if record.checksum != expected
-          failures << {
-            id: record.id,
-            event_type: record.event_type,
-            created_at: record.created_at,
-            expected: expected,
-            actual: record.checksum
-          }
+        if declared.present?
+          expected = record.compute_checksum_value(previous_checksum: declared)
+
+          if record.checksum != expected
+            failures << chain_failure(record, expected: expected, reason: :digest_mismatch)
+          elsif check_parents && !parent_present?(declared, window, relation)
+            if first_row
+              # The walk opens on a row whose parent is already gone, so the
+              # log has had its start removed — retention pruning, typically.
+              # That parent is unknowable, and it can have several children
+              # (which is what a concurrent append leaves behind), so the
+              # exemption is remembered per digest rather than for one row.
+              pruned_parents << declared
+            elsif !pruned_parents.include?(declared)
+              failures << chain_failure(record, expected: expected, reason: :missing_parent)
+            end
+          end
+        else
+          expected = record.compute_checksum_value(previous_checksum: previous_checksum)
+
+          if record.checksum == expected
+            # Links to the row before it, as a linear chain does.
+          elsif !strict && recover_parent(record, window)
+            recovered += 1
+          else
+            failures << chain_failure(record, expected: expected, reason: :digest_mismatch)
+          end
         end
 
-        verified += 1
         previous_checksum = record.checksum
+        first_row = false
+        window << record.checksum
+        window.shift if window.size > recovery_window
       end
 
-      { valid: failures.empty?, verified: verified, failures: failures }
+      { valid: failures.empty?, verified: verified, recovered: recovered, failures: failures }
     end
+
+    # Records, for every row that does not already carry one, the parent digest
+    # it was actually signed against — recovering it by search where a
+    # concurrent append forked the chain. Returns
+    # `{ relinked:, unresolved:, skipped: }`.
+    #
+    # This NEVER rewrites a `checksum`. It writes only the previously-empty
+    # `previous_checksum` column, so it adds no attestation the rows did not
+    # already carry: a parent is recorded only when it reproduces the digest
+    # the row has held since it was written. Rows whose parent cannot be
+    # reproduced are left untouched and counted in :unresolved — they are the
+    # rows verification should keep reporting.
+    def self.relink_checksums!(batch_size: 1000, recovery_window: 256)
+      return { relinked: 0, unresolved: 0, skipped: 0 } unless chain_parent_column?
+
+      previous_checksum = nil
+      relinked = 0
+      unresolved = 0
+      skipped = 0
+      window = []
+
+      each_in_chain_order(all, batch_size: batch_size) do |record|
+        if record.checksum.blank?
+          previous_checksum = nil
+          window.clear
+          next
+        end
+
+        found = resolve_parent(record, previous_checksum, window) if record.previous_checksum.blank?
+
+        if record.previous_checksum.present?
+          skipped += 1
+        elsif found.nil?
+          unresolved += 1
+        elsif found.first.present?
+          record.update_columns(previous_checksum: found.first)
+          relinked += 1
+        else
+          # A genuine segment root. NULL already says so; nothing to write.
+          skipped += 1
+        end
+
+        previous_checksum = record.checksum
+        window << record.checksum
+        window.shift if window.size > recovery_window
+      end
+
+      { relinked: relinked, unresolved: unresolved, skipped: skipped }
+    end
+
+    def self.chain_failure(record, expected:, reason:)
+      {
+        id: record.id,
+        event_type: record.event_type,
+        created_at: record.created_at,
+        expected: expected,
+        actual: record.checksum,
+        reason: reason
+      }
+    end
+    private_class_method :chain_failure
+
+    # Searches `window` (most recent first, then "no parent at all") for the
+    # digest that reproduces the record's stored checksum. Returns a one-element
+    # array holding the parent — which may itself be nil, for a row written
+    # against an empty table — or nil when nothing reproduces the digest.
+    #
+    # SHA-256 preimage resistance is what makes this safe: a row whose fields
+    # were altered reproduces no candidate's digest, so it is still reported.
+    def self.recover_parent(record, window)
+      window.reverse_each do |candidate|
+        return [candidate] if record.checksum == record.compute_checksum_value(previous_checksum: candidate)
+      end
+
+      [nil] if record.checksum == record.compute_checksum_value(previous_checksum: nil)
+    end
+    private_class_method :recover_parent
+
+    def self.resolve_parent(record, previous_checksum, window)
+      return [previous_checksum] if record.checksum == record.compute_checksum_value(previous_checksum: previous_checksum)
+
+      recover_parent(record, window)
+    end
+    private_class_method :resolve_parent
+
+    def self.parent_present?(digest, window, relation)
+      window.include?(digest) || relation.exists?(checksum: digest)
+    end
+    private_class_method :parent_present?
 
     # Backfills checksums for records that don't have them (e.g. pre-existing
     # records before the checksum feature was added).
@@ -225,7 +392,9 @@ module StandardAudit
           record.attributes.slice(*CHECKSUM_FIELDS),
           previous_checksum: previous_checksum
         )
-        record.update_columns(checksum: new_checksum)
+        columns = { checksum: new_checksum }
+        columns[:previous_checksum] = previous_checksum if chain_parent_column?
+        record.update_columns(columns)
 
         previous_checksum = new_checksum
         count += 1
@@ -288,12 +457,25 @@ module StandardAudit
       Rails.logger.warn("[StandardAudit] Failed to emit event: #{e.class}: #{e.message}")
     end
 
-    # Fetches the most recent record's checksum and chains the new record to it.
-    # Note: concurrent inserts can read the same "previous" record, forking
-    # the chain. Use database-level advisory locks if you need serializable
-    # chain integrity under concurrent writes.
+    # Links the new record to whichever row was the chain tip when this writer
+    # read it, and RECORDS WHICH ONE THAT WAS.
+    #
+    # The tip read is deliberately unlocked. Two concurrent transactions cannot
+    # see each other's uncommitted rows, so both may read the same tip and the
+    # sequence forks — that is not an error, it is what a multi-process writer
+    # does, and it is why 67% of one production log failed verification while
+    # the rows themselves were untampered (fundbright/delivery-ops#433). The
+    # alternative is a lock held until the *enclosing business transaction*
+    # commits (a row is invisible to other writers until then, so releasing
+    # earlier reopens the race), which would serialise every audited request in
+    # the estate behind one mutex. Recording the parent instead makes the fork
+    # verifiable rather than preventing it.
+    #
+    # `previous_checksum` needs no protection of its own: it is an input to
+    # this row's own digest, so editing it invalidates the row.
     def compute_checksum
-      previous = self.class.order(created_at: :desc, id: :desc).limit(1).pick(:checksum)
+      previous = self.class.chain_tip_checksum
+      self.previous_checksum = previous if self.class.chain_parent_column?
       self.checksum = compute_checksum_value(previous_checksum: previous)
     end
 
