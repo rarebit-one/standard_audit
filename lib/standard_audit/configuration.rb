@@ -7,7 +7,7 @@ module StandardAudit
                   :current_session_id_resolver,
                   :sensitive_keys, :sensitive_key_patterns,
                   :sensitive_key_exceptions, :filter_nested_metadata,
-                  :metadata_builder,
+                  :metadata_builder, :before_checksum_hooks,
                   :anonymizable_metadata_keys, :retention_days
 
     def initialize
@@ -70,6 +70,12 @@ module StandardAudit
       @filter_nested_metadata = false
 
       @metadata_builder = nil
+
+      # Callables (or Symbols naming an AuditLog instance method) run on
+      # `before_create` AFTER the UUID is assigned and BEFORE the checksum is
+      # computed. See Configuration#before_checksum.
+      @before_checksum_hooks = []
+
       @anonymizable_metadata_keys = %i[email name ip_address]
 
       # Retention defaults from ENV so it can be set per-environment without a
@@ -87,6 +93,37 @@ module StandardAudit
 
       days = Integer(raw, exception: false)
       days&.positive? ? days : nil
+    end
+
+    # Registers a hook to run between `assign_uuid` and `compute_checksum` on
+    # every audit write that instantiates a model.
+    #
+    #   config.before_checksum { |log| log.scope = derive_scope(log) }
+    #   config.before_checksum :backfill_organization_scope
+    #
+    # A hook may set a `CHECKSUM_FIELDS` member (`scope_gid`, `metadata`, …) and
+    # the row will still verify, because the checksum is computed afterwards.
+    # That is the whole point: before this existed, hosts had to register their
+    # own `before_create ..., prepend: true` to beat the gem's checksum
+    # callback, which is fragile ordering knowledge no host should need.
+    #
+    # Hooks accumulate and run in registration order. Each is rescued
+    # individually — a failing hook logs and is skipped; it never fails the
+    # audit write.
+    #
+    # A Symbol/String is sent to the AuditLog instance (use this for methods
+    # supplied by a concern mixed into the model). A callable is passed the
+    # instance.
+    #
+    # NOTE: batched writes (`StandardAudit.batch { … }` → `insert_all!`) never
+    # instantiate a model, so hooks do not run there. A batched writer that
+    # needs a derived column has to set it on the buffered attrs.
+    def before_checksum(hook = nil, &block)
+      hook ||= block
+      raise ArgumentError, "before_checksum needs a callable, a Symbol, or a block" if hook.nil?
+
+      @before_checksum_hooks << hook
+      hook
     end
 
     def subscribe_to(pattern)

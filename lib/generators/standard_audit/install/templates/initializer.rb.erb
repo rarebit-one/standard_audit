@@ -1,4 +1,8 @@
-StandardAudit.configure do |config|
+# `baseline: true` remembers this block so `StandardAudit.reset_configuration!`
+# replays it. Required if you `require "standard_audit/rspec"` in your suite:
+# without it, every example resets to gem defaults and loses the configuration
+# below — including any `before_checksum` hooks, which are behaviour, not data.
+StandardAudit.configure(baseline: true) do |config|
   # Subscribe to ActiveSupport::Notifications / Rails.event patterns.
   # Each gem documents its own event namespace; subscribe to whichever
   # patterns you want audited:
@@ -69,4 +73,17 @@ StandardAudit.configure do |config|
 
   # Data retention (schedule StandardAudit::CleanupJob to enforce)
   # config.retention_days = nil
+
+  # -- Write-time hooks -------------------------------------------------------
+  #
+  # Run between the UUID assignment and the checksum computation, so a hook MAY
+  # set a checksummed column (scope_gid, metadata, ...) and the row still passes
+  # `AuditLog.verify_chain`. No `prepend: true` needed.
+  #
+  # Each hook is rescued individually — a failing hook is logged and skipped and
+  # never fails the audit write. Batched writes (StandardAudit.batch, which uses
+  # insert_all!) never instantiate a model, so hooks do not run there.
+  #
+  # config.before_checksum { |log| log.scope = MyApp.derive_scope(log) }
+  # config.before_checksum :backfill_scope   # an AuditLog instance method
 end

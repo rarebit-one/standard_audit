@@ -164,8 +164,13 @@ organisation.scoped_audit_logs  # all logs scoped to this organisation
 
 ## Configuration Reference
 
+Use `configure(baseline: true)` in your initializer. It remembers the block so
+`StandardAudit.reset_configuration!` replays it — required if your suite loads
+`standard_audit/rspec`, because the config object holds behaviour (`before_checksum`
+hooks) as well as data, and a per-example reset would otherwise drop it.
+
 ```ruby
-StandardAudit.configure do |config|
+StandardAudit.configure(baseline: true) do |config|
   # -- Subscriptions --
   # Subscribe to ActiveSupport::Notifications patterns.
   # Supports wildcards.
@@ -204,6 +209,14 @@ StandardAudit.configure do |config|
   # Descend into nested Hashes when redacting. OFF by default — without it,
   # `metadata: { stripe: { client_secret: ... } }` is written intact.
   config.filter_nested_metadata = true
+
+  # -- Write-time hooks --
+  # Run between the UUID assignment and the checksum computation, so a hook MAY
+  # set a checksummed column and the row still passes `verify_chain`. No
+  # `prepend: true` needed. Each hook is rescued individually and can never fail
+  # the audit write. Not run on the batched `insert_all!` path.
+  config.before_checksum { |log| log.scope = MyApp.derive_scope(log) }
+  config.before_checksum :backfill_scope   # an AuditLog instance method
 
   # -- Metadata Builder --
   # Optional proc to transform metadata before storage.

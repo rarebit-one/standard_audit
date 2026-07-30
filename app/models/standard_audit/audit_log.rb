@@ -12,7 +12,15 @@ module StandardAudit
       user_agent session_id occurred_at
     ].freeze
 
+    # Callback ORDER IS THE CONTRACT here. Definition order is execution
+    # order, so registering the host hook list between assign_uuid and
+    # compute_checksum means a hook can set a CHECKSUM_FIELDS member (e.g.
+    # back-fill `scope`) and the row still verifies. Hosts previously had to
+    # register `before_create ..., prepend: true` themselves to beat
+    # compute_checksum — fragile ordering knowledge no host should need.
+    # Do not reorder these three lines.
     before_create :assign_uuid, if: -> { id.blank? }
+    before_create :run_before_checksum_hooks
     before_create :compute_checksum, if: -> { checksum.blank? }
     after_create_commit :emit_created_event
 
@@ -255,6 +263,61 @@ module StandardAudit
 
     def assign_uuid
       self.id = SecureRandom.uuid_v7
+    end
+
+    # Runs config.before_checksum_hooks in registration order. Each hook is
+    # rescued individually: an audit write must never fail because a host's
+    # derived-column logic did. A hook that raises is rolled back to the
+    # attributes it started from and skipped; the remaining hooks still run.
+    def run_before_checksum_hooks
+      hooks = StandardAudit.config.before_checksum_hooks
+      return if hooks.blank?
+
+      # Only relevant when a checksum was supplied explicitly (the normal path
+      # has none yet, and compute_checksum runs next).
+      checksummed_before = checksum.present? ? attributes.slice(*CHECKSUM_FIELDS) : nil
+
+      hooks.each { |hook| run_before_checksum_hook(hook) }
+
+      # A caller-supplied checksum stops describing the row the moment a hook
+      # changes a checksummed field. Dropping it lets compute_checksum
+      # re-derive one, rather than persisting a row that fails verify_chain
+      # immediately. Hooks still run for such rows, because most derived
+      # columns (actor_role and friends) are not checksummed at all.
+      self.checksum = nil if checksummed_before && attributes.slice(*CHECKSUM_FIELDS) != checksummed_before
+    end
+
+    def run_before_checksum_hook(hook)
+      snapshot = attributes.deep_dup
+
+      begin
+        case hook
+        when Symbol, String then send(hook)
+        else hook.call(self)
+        end
+      rescue StandardError => e
+        # Roll the record back to where the hook found it. Without this a hook
+        # that assigns scope_gid and then fails a later lookup leaves a
+        # half-applied row that the following callbacks happily checksum and
+        # persist — so the hook would not actually be "skipped".
+        restore_attributes_from(snapshot)
+        Rails.logger.warn("[StandardAudit] before_checksum hook failed: #{e.class}: #{e.message}")
+        Rails.error.report(e, handled: true, context: { audit_event: event_type }) if Rails.respond_to?(:error)
+        nil
+      end
+    end
+
+    def restore_attributes_from(snapshot)
+      snapshot.each do |name, value|
+        write_attribute(name, value) unless read_attribute(name) == value
+      end
+
+      # The reference memo may hold a record the hook assigned; drop it so the
+      # restored gid columns are the source of truth again.
+      @preloaded_references = nil
+    rescue StandardError => e
+      Rails.logger.warn("[StandardAudit] could not roll back a failed before_checksum hook: #{e.class}: #{e.message}")
+      nil
     end
   end
 end
