@@ -45,6 +45,7 @@ standard_audit/
 │   ├── audit_scope.rb                # Concern for tenant/scope models
 │   ├── configuration.rb              # Configuration object
 │   ├── engine.rb                     # Wires subscribers at boot
+│   ├── metadata_filter.rb            # Sensitive-key redaction (both write paths)
 │   ├── reference_preloading.rb       # Batch actor/target/scope GID resolution
 │   ├── event_subscriber.rb           # Rails.event subscriber (8.1+)
 │   ├── subscriber.rb                 # AS::Notifications subscriber
@@ -218,8 +219,25 @@ serialising actor/target/scope as GID strings and resolving them inside
 
 - Audit rows are append-only — `update`/`destroy` raise `ReadOnlyRecord`.
   GDPR anonymization deliberately uses `update_columns` to bypass this.
+- **One filter, two write paths.** `StandardAudit::MetadataFilter` is the only
+  implementation of sensitive-key redaction; `StandardAudit.record` and
+  `Subscriber#extract_metadata` both call it. They used to carry independent
+  copies which had already diverged (the subscriber copy did not subtract
+  `RESERVED_METADATA_KEYS`). The parity is driven from one shared example —
+  `spec/support/shared_examples/metadata_filtering.rb` — so a future
+  divergence fails the suite. Do not reintroduce a local `sensitive_keys`
+  reject anywhere. The filter **fails closed**: hash-like input that isn't a
+  `Hash` (e.g. `ActionController::Parameters`) is still filtered, and input it
+  cannot filter raises rather than being written unredacted.
 - `RESERVED_METADATA_KEYS = %w[_tags _source]` are never filtered, even if
   the consumer adds them to `sensitive_keys`.
+- Matching is **exact, on the key name**, string/symbol-insensitive. It is not
+  a substring match, and must not become one by default: `input_tokens` /
+  `output_tokens` (live LLM cost accounting), `token_digest` (rendered in a
+  staff audit UI), `password_reset_sent_at`, `authorization_endpoint` and
+  `onepassword` are all real audit content across the estate that substring
+  matching would silently strip. Audit rows are append-only, so it cannot be
+  undone.
 - Default `sensitive_keys` cover password / token / secret / api_key /
   access_token / refresh_token / private_key / certificate_chain / ssn /
   credit_card / authorization. The `:authorization` key filters HTTP
@@ -238,6 +256,7 @@ serialising actor/target/scope as GID strings and resolving them inside
 | `lib/standard_audit.rb`                             | Public API: `record`, `batch`, `configure`      |
 | `lib/standard_audit/configuration.rb`               | Configuration object                            |
 | `lib/standard_audit/engine.rb`                      | Wires subscribers at boot                       |
+| `lib/standard_audit/metadata_filter.rb`             | Sensitive-key redaction, shared by both paths   |
 | `lib/standard_audit/subscriber.rb`                  | `AS::Notifications` subscriber                  |
 | `lib/standard_audit/event_subscriber.rb`            | `Rails.event` subscriber (8.1+)                 |
 | `lib/standard_audit/reference_preloading.rb`        | Batch actor/target/scope GID resolution + memo   |

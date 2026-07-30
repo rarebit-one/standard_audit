@@ -79,9 +79,11 @@ module StandardAudit
         raw_metadata = config.metadata_builder.call(raw_metadata)
       end
 
-      # Filter sensitive keys
-      sensitive = config.sensitive_keys.map(&:to_s)
-      raw_metadata.reject { |k, _| sensitive.include?(k.to_s) }
+      # Redaction lives in MetadataFilter, shared with StandardAudit.record.
+      # This path previously carried its own copy that did *not* subtract
+      # RESERVED_METADATA_KEYS, so `_tags`/`_source` were strippable here and
+      # not there.
+      StandardAudit::MetadataFilter.call(raw_metadata, config: config)
     end
   end
 end

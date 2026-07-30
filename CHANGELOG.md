@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - A type string that no longer constantizes — or a blank `*_type` on a row that still carries a `*_gid` — is left *unmemoized*, so the per-row reader behaves exactly as it did before preloading was attempted. Preloading can never turn a resolvable reference into a permanent `nil`.
 - `AuditLog#actor_model_id` / `#target_model_id` / `#scope_model_id` (and `AuditLog.reference_model_id(gid)`) — the model id extracted straight from the gid string, a helper three separate consumer call sites had hand-rolled. Deliberately **not** `GlobalID.parse(gid)&.model_id`: audit rows are historical and append-only, so a gid whose app segment differs from the current `GlobalID.app` is a real row that must still yield its id. Mirrors `URI::GID`'s own decoding (drops `?params`, `CGI.unescape`s each segment, returns an Array for a composite primary key) while ignoring the app name, so it agrees with `GlobalID#model_id` wherever that works and keeps working where it doesn't.
 
+### Fixed
+
+- **The two write paths applied different sensitive-key filters.** `StandardAudit.record` and `StandardAudit::Subscriber#extract_metadata` each carried an independent copy of the redaction logic, and they had already diverged: the subscriber copy did not subtract `RESERVED_METADATA_KEYS`, so an app that added `:_tags` or `:_source` to `sensitive_keys` had the reserved key preserved on the `record` path and stripped on the `ActiveSupport::Notifications` path. Both now call the single `StandardAudit::MetadataFilter`, and the divergence is resolved in favour of `record`'s behaviour — reserved keys can never be filtered on either path. Parity is driven from one shared example (`spec/support/shared_examples/metadata_filtering.rb`), so a future divergence fails the suite rather than shipping.
+
+### Added
+
+- `StandardAudit::MetadataFilter` — `MetadataFilter.call(metadata, config:)` filters metadata; `MetadataFilter.new.filter?(key)` answers the same question for a single key without writing a row. Matching stays **exact on the key name** (string/symbol insensitive), unchanged from 0.6.0. Anything hash-like is filtered (so `ActionController::Parameters` is redacted, not waved through because it isn't a `Hash`); `nil` passes; anything else raises `MetadataFilter::UnfilterableMetadataError` rather than writing unfiltered content to an append-only row.
+
 ### Notes
 
 - `StandardAudit.batch { ... }` flushes via `insert_all!` and never instantiates a model, so none of the above runs on the batched write path — the memo is a no-op there by construction.
