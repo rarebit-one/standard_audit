@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Batch actor/target/scope preloading.** `AuditLog#actor` / `#target` / `#scope` resolved their GlobalID one row at a time, so every audit list N+1'd. Two consuming apps had already fixed this locally, both by reaching into private ivars (`instance_variable_set(:@preloaded_actor, …)`) because the gem exposed no setter. The gem now owns it:
+  - `AuditLog.preload_references(logs, refs: %i[actor target], only: [...], includes: {...})` resolves a page in one query per distinct stored `*_type`, built on `GlobalID::Locator.locate_many` with `ignore_missing: true`.
+  - `preloaded_actor=` / `preloaded_target=` / `preloaded_scope=` public writers, plus `actor_preloaded?` predicates.
+  - The memo is a Hash consulted with `key?`, so *preloaded-but-deleted* memoizes `nil` and reads back without a query — distinct from *not preloaded*. `actor=` / `target=` / `scope=` populate the memo (they already hold the record); `reload` clears it.
+  - `only:` is matched against the **stored type string by class name**. `GlobalID::Locator`'s own `:only` is evaluated as `gid.model_class <= klass`, which constantizes the historical type string *before* deciding whether it was permitted — so a renamed or deleted class raises `NameError` rather than being denied. Consequence: `only:` does not expand to subclasses or modules; list every concrete class. A non-whitelisted reference memoizes `nil`.
+  - `includes:` is treated as a per-type map when every key is a String or Class (`{ "Order" => [:user] }`), and as a uniform Active Record includes spec otherwise (so `{ account: :identifiers }` still works as you'd expect).
+  - A type string that no longer constantizes — or a blank `*_type` on a row that still carries a `*_gid` — is left *unmemoized*, so the per-row reader behaves exactly as it did before preloading was attempted. Preloading can never turn a resolvable reference into a permanent `nil`.
+- `AuditLog#actor_model_id` / `#target_model_id` / `#scope_model_id` (and `AuditLog.reference_model_id(gid)`) — the model id extracted straight from the gid string, a helper three separate consumer call sites had hand-rolled. Deliberately **not** `GlobalID.parse(gid)&.model_id`: audit rows are historical and append-only, so a gid whose app segment differs from the current `GlobalID.app` is a real row that must still yield its id. Mirrors `URI::GID`'s own decoding (drops `?params`, `CGI.unescape`s each segment, returns an Array for a composite primary key) while ignoring the app name, so it agrees with `GlobalID#model_id` wherever that works and keeps working where it doesn't.
+
+### Notes
+
+- `StandardAudit.batch { ... }` flushes via `insert_all!` and never instantiates a model, so none of the above runs on the batched write path — the memo is a no-op there by construction.
+- Minor behaviour change on a single instance: `log.actor = user; user.destroy!; log.actor` now returns the (destroyed) in-memory record instead of `nil`, because the writer memoizes. Reading the row fresh (or calling `reload`) is unchanged and still returns `nil`. This matches how Active Record association writers behave.
+
 ## [0.6.0] - 2026-06-24
 
 ### Added

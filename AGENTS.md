@@ -45,6 +45,7 @@ standard_audit/
 │   ├── audit_scope.rb                # Concern for tenant/scope models
 │   ├── configuration.rb              # Configuration object
 │   ├── engine.rb                     # Wires subscribers at boot
+│   ├── reference_preloading.rb       # Batch actor/target/scope GID resolution
 │   ├── event_subscriber.rb           # Rails.event subscriber (8.1+)
 │   ├── subscriber.rb                 # AS::Notifications subscriber
 │   ├── rspec.rb                      # RSpec auto-cleanup plugin
@@ -84,9 +85,34 @@ The engine attaches two subscribers at boot:
 ### GlobalID polymorphism
 
 `AuditLog#actor=`, `#target=`, `#scope=` serialize records as GID strings and
-remember `*_type`. The matching readers use `GlobalID::Locator.locate`. If
-the underlying record was deleted, the reader returns `nil` but the GID and
-type remain on the row.
+remember `*_type`. The matching readers consult a per-row preload memo, then
+fall back to `GlobalID::Locator.locate`. If the underlying record was deleted,
+the reader returns `nil` but the GID and type remain on the row.
+
+`#actor_model_id` / `#target_model_id` / `#scope_model_id` return the trailing
+gid segment. Deliberately not `GlobalID.parse(gid)&.model_id` — audit gids are
+historical, so a gid whose app segment differs from the current `GlobalID.app`
+is still a real row. The trailing segment is app-name agnostic.
+
+### Batch reference preloading
+
+`AuditLog.preload_references(logs, refs: %i[actor target], only: [...],
+includes: {...})` resolves a whole page in one query per distinct stored
+`*_type`, then memoizes onto each row. `preloaded_actor=` /
+`preloaded_target=` / `preloaded_scope=` are the public writers.
+
+- The memo is a Hash consulted with `key?`, so **preloaded-but-deleted
+  memoizes `nil` and reads back without a query** — distinct from
+  not-preloaded. `#actor_preloaded?` reports which.
+- `actor=` / `target=` / `scope=` populate the memo (they hold the record);
+  `reload` clears it.
+- `only:` is matched against the **stored type string by class name**, not via
+  `GlobalID`'s `gid.model_class <= klass` (which constantizes *before*
+  filtering, so a renamed historical class raises `NameError` instead of being
+  denied). It therefore does not expand to subclasses or modules — list every
+  concrete class. Non-whitelisted references memoize `nil`.
+- `includes:` is per-type when every Hash key is a String or Class
+  (`{ "Order" => [:user] }`); anything else is a uniform includes spec.
 
 ### AuditLog model
 
@@ -102,8 +128,12 @@ type remain on the row.
 
 `StandardAudit.batch { ... }` buffers `record` calls in
 `Thread.current[:standard_audit_batch]` and flushes via `insert_all!` on
-block exit. Each row is given a UUIDv7 id (sorted to match insert order)
-and chained checksum. `AuditLog.compute_checksum_value` hashes a canonical
+block exit. **`insert_all!` bypasses Active Record entirely** — no model is
+instantiated, so `before_create` callbacks, the checksum callback, and the
+reference-preload memo all do not run on that path (the batch path computes
+checksums itself). A host callback that must apply to batched rows has to set
+the column on the buffered attrs, not in a model hook. Each row is given a
+UUIDv7 id (sorted to match insert order) and chained checksum. `AuditLog.compute_checksum_value` hashes a canonical
 serialisation of `CHECKSUM_FIELDS` plus the previous row's checksum;
 `AuditLog.verify_chain` and `AuditLog.backfill_checksums!` walk the chain
 in `(created_at, id)` order. Concurrent writers can fork the chain — see
@@ -210,6 +240,7 @@ serialising actor/target/scope as GID strings and resolving them inside
 | `lib/standard_audit/engine.rb`                      | Wires subscribers at boot                       |
 | `lib/standard_audit/subscriber.rb`                  | `AS::Notifications` subscriber                  |
 | `lib/standard_audit/event_subscriber.rb`            | `Rails.event` subscriber (8.1+)                 |
+| `lib/standard_audit/reference_preloading.rb`        | Batch actor/target/scope GID resolution + memo   |
 | `lib/standard_audit/rspec.rb`                       | RSpec auto-cleanup plugin                       |
 | `app/models/standard_audit/audit_log.rb`            | Core model, scopes, checksum chain, GDPR        |
 | `app/jobs/standard_audit/create_audit_log_job.rb`   | Async write path                                |

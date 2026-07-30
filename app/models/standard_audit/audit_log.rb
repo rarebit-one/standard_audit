@@ -2,6 +2,8 @@ require "openssl"
 
 module StandardAudit
   class AuditLog < ApplicationRecord
+    include StandardAudit::ReferencePreloading
+
     self.table_name = "audit_logs"
 
     CHECKSUM_FIELDS = %w[
@@ -24,61 +26,35 @@ module StandardAudit
     validates :event_type, presence: true
     validates :occurred_at, presence: true
 
-    # -- Actor assignment via GlobalID --
+    # -- actor / target / scope assignment via GlobalID --
+    #
+    # Reads consult the preload memo first (see ReferencePreloading), then fall
+    # back to a single `GlobalID::Locator.locate`. Writers populate the memo,
+    # since they already hold the record. If the underlying record was deleted
+    # the reader returns nil while the gid and type stay on the row.
 
     def actor=(record)
-      if record.nil?
-        self.actor_gid = nil
-        self.actor_type = nil
-      else
-        self.actor_gid = record.to_global_id.to_s
-        self.actor_type = record.class.name
-      end
+      assign_reference(:actor, record)
     end
 
     def actor
-      return nil if actor_gid.blank?
-      GlobalID::Locator.locate(actor_gid)
-    rescue ActiveRecord::RecordNotFound
-      nil
+      read_reference(:actor)
     end
 
-    # -- Target assignment via GlobalID --
-
     def target=(record)
-      if record.nil?
-        self.target_gid = nil
-        self.target_type = nil
-      else
-        self.target_gid = record.to_global_id.to_s
-        self.target_type = record.class.name
-      end
+      assign_reference(:target, record)
     end
 
     def target
-      return nil if target_gid.blank?
-      GlobalID::Locator.locate(target_gid)
-    rescue ActiveRecord::RecordNotFound
-      nil
+      read_reference(:target)
     end
 
-    # -- Scope assignment via GlobalID --
-
     def scope=(record)
-      if record.nil?
-        self.scope_gid = nil
-        self.scope_type = nil
-      else
-        self.scope_gid = record.to_global_id.to_s
-        self.scope_type = record.class.name
-      end
+      assign_reference(:scope, record)
     end
 
     def scope
-      return nil if scope_gid.blank?
-      GlobalID::Locator.locate(scope_gid)
-    rescue ActiveRecord::RecordNotFound
-      nil
+      read_reference(:scope)
     end
 
     # -- Query scopes --
