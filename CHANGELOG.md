@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`verify_chain` did not walk the order it documents, and neither did `backfill_checksums!`.** Both claimed a `(created_at, id)` walk and both used `in_batches`, which paginates by **primary key** range and applies the sort only *within* each batch — so the global sequence was a concatenation of id-ranges, each internally time-sorted. Both now walk with a keyset cursor ordered by `(created_at, id)`, which is the documented order and still loads only `batch_size` rows at a time.
+
+  With the UUIDv7 ids `assign_uuid` generates, id order usually coincides with insertion order, which is why this stayed latent — but it is wrong for any host that assigns ids differently, backfills rows with an explicit `created_at`, or has clock skew between writers. It matters more than a latent ordering bug normally would: the chain is an *ordering* claim, so a verifier that walks a different order than the one it documents cannot be trusted to prove or disprove anything about chain integrity, including the concurrent-append defect tracked in `fundbright/delivery-ops#433`. `backfill_checksums!` had the same defect, and there it silently *writes* the wrong chain rather than misreading one.
+
 ## [0.7.0] - 2026-07-30
 
 ### Added
