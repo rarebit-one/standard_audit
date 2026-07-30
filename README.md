@@ -189,8 +189,21 @@ StandardAudit.configure do |config|
   config.current_session_id_resolver = -> { Current.session_id }
 
   # -- Sensitive Data --
-  # Keys automatically stripped from metadata.
+  # Keys automatically stripped from metadata. Matching is EXACT on the key
+  # name; there is deliberately no substring mode (see below).
   config.sensitive_keys += %i[my_custom_secret]  # added to built-in defaults
+
+  # Regexps matched against every key name, in addition to the exact list.
+  # Solves e.g. Stripe's `client_secret`, which does not equal `:secret`.
+  config.sensitive_key_patterns = [/secret/i]
+
+  # Keys (exact names or Regexps) that are never redacted, so a broad pattern
+  # can keep the real audit keys it would otherwise swallow.
+  config.sensitive_key_exceptions = %i[input_tokens output_tokens]
+
+  # Descend into nested Hashes when redacting. OFF by default — without it,
+  # `metadata: { stripe: { client_secret: ... } }` is written intact.
+  config.filter_nested_metadata = true
 
   # -- Metadata Builder --
   # Optional proc to transform metadata before storage.
@@ -423,7 +436,29 @@ t.jsonb :metadata, default: {}
 
 ```ruby
 config.sensitive_keys += %i[medical_record_number]  # extend the built-in defaults
+config.sensitive_key_patterns = [/secret/i]         # catch a whole family
+config.sensitive_key_exceptions = %i[input_tokens]  # ...minus the real ones
+config.filter_nested_metadata = true                # redact nested Hashes too
 ```
+
+`sensitive_keys` matches **exactly** on the key name. There is deliberately no
+substring mode: against the default list it would strip real audit content —
+`input_tokens` / `output_tokens`, `token_digest`, `password_reset_sent_at`,
+`authorization_endpoint`, `onepassword`. Audit rows are append-only, so that
+cannot be undone. Use `sensitive_key_patterns` and check any rule against your
+own data first:
+
+```bash
+bin/rails "standard_audit:sensitive_keys:dry_run[secret]"   # NESTED=1 to model nesting
+```
+
+The dry run writes nothing. It reports per key what would be stripped, what
+would be kept, and nested matches that survive because
+`filter_nested_metadata` is off.
+
+Nested metadata is **not** redacted unless `filter_nested_metadata` is enabled
+— `metadata: { stripe: { client_secret: ... } }` passes both write paths under
+exact matching by default.
 
 **Performance**: For high-volume applications, enable async processing and ensure your `audit_logs` table has appropriate indexes (the install generator adds them by default). Consider partitioning by `occurred_at` for very large tables.
 

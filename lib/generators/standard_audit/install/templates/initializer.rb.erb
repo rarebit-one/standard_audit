@@ -27,10 +27,35 @@ StandardAudit.configure do |config|
   # config.current_user_agent_resolver = -> { Current.user_agent }
   # config.current_session_id_resolver = -> { Current.session_id }
 
-  # Keys to strip from metadata (defaults include: password, password_confirmation,
-  # token, secret, api_key, access_token, refresh_token, private_key,
-  # certificate_chain, ssn, credit_card, authorization)
+  # -- Metadata redaction ----------------------------------------------------
+  #
+  # Keys to strip from metadata. Matching is EXACT on the key name (defaults
+  # include: password, password_confirmation, token, secret, api_key,
+  # access_token, refresh_token, private_key, certificate_chain, ssn,
+  # credit_card, authorization).
   # config.sensitive_keys += %i[my_custom_secret]
+  #
+  # Regexps matched against every key name, in addition to the exact list.
+  # This is the supported way to catch a family of keys — e.g. Stripe's
+  # `client_secret`, which does not equal the default `:secret`:
+  # config.sensitive_key_patterns = [/secret/i]
+  #
+  # There is deliberately no "substring" matching mode. Against the default
+  # key list it would strip real audit content: input_tokens/output_tokens,
+  # token_digest, password_reset_sent_at, authorization_endpoint, onepassword.
+  # Audit rows are append-only, so that cannot be undone. Check any rule
+  # against your own data first:
+  #
+  #   bin/rails "standard_audit:sensitive_keys:dry_run[secret]"
+  #
+  # Keys (exact names or Regexps) that are never redacted, so a broad pattern
+  # can keep the handful of real audit keys it would otherwise swallow:
+  # config.sensitive_key_exceptions = %i[input_tokens output_tokens]
+  #
+  # Descend into nested Hashes when redacting. Off by default because it
+  # changes what gets written; `metadata: { stripe: { client_secret: ... } }`
+  # is NOT redacted unless you turn this on. Run the dry run first.
+  # config.filter_nested_metadata = true
 
   # Run audit log creation in background job
   # config.async = false
