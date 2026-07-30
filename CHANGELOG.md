@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-30
+
 ### Added
 
 - **Batch actor/target/scope preloading.** `AuditLog#actor` / `#target` / `#scope` resolved their GlobalID one row at a time, so every audit list N+1'd. Two consuming apps had already fixed this locally, both by reaching into private ivars (`instance_variable_set(:@preloaded_actor, …)`) because the gem exposed no setter. The gem now owns it:
