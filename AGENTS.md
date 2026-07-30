@@ -69,9 +69,49 @@ standard_audit/
 
 `StandardAudit.configure { |config| ... }` mutates a single
 `StandardAudit::Configuration` instance held in `@configuration`. Settings
-include subscriptions, extractors, `Current.*` resolvers, sensitive keys,
-metadata builder, async flag, retention, and anonymizable keys. Tests can
-call `StandardAudit.reset_configuration!` to drop the memoized config.
+include subscriptions, extractors, `Current.*` resolvers, sensitive keys +
+patterns + exceptions, nested filtering, metadata builder,
+`before_checksum` hooks, async flag, retention, and anonymizable keys.
+`StandardAudit.reset_configuration!` drops the memoized config.
+
+**Any new Configuration field must be in the `attr_accessor` list AND
+defaulted in `initialize`**, or the rspec plugin's per-example reset leaves
+it nil.
+
+`StandardAudit.configure(baseline: true) { ... }` additionally *remembers*
+the block, and `reset_configuration!` replays it. Host initializers should
+always use it, and the install template does. The config object holds
+**behaviour**, not just data — `before_checksum_hooks` live there — so a
+suite that installs `standard_audit/rspec` without a baseline silently
+loses its write-time hooks after the first example, and the specs that
+would notice pass vacuously. `reset_configuration!(replay_baseline: false)`
+and `clear_baseline_configuration!` exist for the gem's own specs.
+
+### before_checksum hooks
+
+`config.before_checksum { |log| ... }` (or `config.before_checksum
+:some_instance_method`) registers a hook that runs on `before_create`
+**between `assign_uuid` and `compute_checksum`**. Definition order is
+execution order, so a hook may set a `CHECKSUM_FIELDS` member — back-fill
+`scope`, derive a column, rewrite `metadata` — and the row still passes
+`verify_chain`. That is exactly what hosts were buying with their own
+`before_create ..., prepend: true`, and they no longer need it.
+
+**Do not reorder those three `before_create` lines in `audit_log.rb`.**
+
+Each hook is rescued individually: a failing hook logs (and reports to
+`Rails.error`), is **rolled back to the attributes it started from**, and is
+skipped — it never fails the audit write. The rollback matters: without it a
+hook that assigns `scope_gid` and then fails a later lookup would leave a
+half-applied row that the following callbacks checksum and persist, so the
+hook would not really be "skipped".
+
+If a row is created with an explicit `checksum`, hooks still run (most
+derived columns aren't checksummed), but the supplied checksum is dropped
+and re-derived if a hook changed a `CHECKSUM_FIELDS` member — otherwise the
+row would fail `verify_chain` on arrival.
+
+Hooks do not run on the batched `insert_all!` path.
 
 ### Dual notification backend
 
@@ -212,7 +252,10 @@ serialising actor/target/scope as GID strings and resolving them inside
 - No FactoryBot — specs build records inline.
 - Auto-cleanup plugin: `require "standard_audit/rspec"` to install a
   `before(:each)` hook that clears the thread-local batch buffer and resets
-  the memoized configuration so per-example mutations do not leak.
+  the memoized configuration so per-example mutations do not leak. Adopting
+  it **requires** the host initializer to use `configure(baseline: true)` —
+  otherwise the reset drops the app's real configuration, `before_checksum`
+  hooks included.
 - `shoulda-matchers` is loaded for `should validate_presence_of` style.
 - `ActiveSupport::Testing::TimeHelpers` is included globally.
 

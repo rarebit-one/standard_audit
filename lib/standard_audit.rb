@@ -16,8 +16,30 @@ module StandardAudit
   RESERVED_METADATA_KEYS = %w[_tags _source].freeze
 
   class << self
-    def configure
-      yield(config) if block_given?
+    # Applies configuration to the single mutable Configuration instance.
+    #
+    # `baseline: true` also *remembers* the block, so `reset_configuration!`
+    # replays it. That matters because the config object holds behaviour, not
+    # just data — `before_checksum_hooks` in particular. Without a baseline, a
+    # suite that installs the rspec plugin (which calls `reset_configuration!`
+    # before every example) silently loses write-time hooks after the first
+    # example, and the specs that would notice pass vacuously.
+    #
+    # Idiomatic host usage, in config/initializers/standard_audit.rb:
+    #
+    #   StandardAudit.configure(baseline: true) do |config|
+    #     config.subscribe_to "myapp.**"
+    #     config.before_checksum :backfill_scope
+    #   end
+    #
+    # Only the most recent `baseline: true` block is remembered; call it once,
+    # from the initializer.
+    def configure(baseline: false, &block)
+      return config unless block
+
+      @baseline_configuration = block if baseline
+      block.call(config)
+      config
     end
 
     def config
@@ -103,8 +125,24 @@ module StandardAudit
       @event_subscriber ||= EventSubscriber.new
     end
 
-    def reset_configuration!
+    # Drops the memoized Configuration. Any block registered with
+    # `configure(baseline: true)` is replayed onto the fresh instance, so a
+    # per-example reset restores the app's real configuration rather than the
+    # gem defaults.
+    def reset_configuration!(replay_baseline: true)
       @configuration = nil
+      @baseline_configuration&.call(config) if replay_baseline
+      config
+    end
+
+    # Forgets the `configure(baseline: true)` block. Mainly for the gem's own
+    # specs and for a host that needs a genuinely pristine configuration.
+    def clear_baseline_configuration!
+      @baseline_configuration = nil
+    end
+
+    def baseline_configured?
+      !@baseline_configuration.nil?
     end
 
     private
