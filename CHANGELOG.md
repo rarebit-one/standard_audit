@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-07-31
+
 ### Added
 
 - **`config.audit_error_context_key`** (default `:audit_action`) — renames the `Rails.error.report` context key naming the audit action, without needing a whole handler. Two apps had overridden `audit_write_error_handler` for nothing but this: both tag every OTHER audit-error report site with `audit_event:` (four sites in one, twelve across ten files in the other), so adopting the gem name left the operations layer as the only place forking the convention. A handler written to rename one key also silently opts out of every future improvement to the built-in reporter.
