@@ -7,6 +7,7 @@ module StandardAudit
                   :current_session_id_resolver,
                   :sensitive_keys, :sensitive_key_patterns,
                   :sensitive_key_exceptions, :filter_nested_metadata,
+                  :dereference_record_metadata,
                   :metadata_builder, :before_checksum_hooks,
                   :anonymizable_metadata_keys, :retention_days,
                   :audit_catalogue, :verify_audit_declarations,
@@ -71,6 +72,25 @@ module StandardAudit
       # Defaults to false: it changes what gets written, and audit rows are
       # append-only. Reserved keys are never descended into.
       @filter_nested_metadata = false
+
+      # When true (the default), an ActiveRecord object appearing anywhere in
+      # audit metadata is replaced by a reference —
+      # `{ "gid" => …, "type" => …, "id" => … }` — instead of being serialised
+      # with all of its attributes. See StandardAudit::RecordReference.
+      #
+      # Defaults to the SAFE behaviour, unlike `filter_nested_metadata`,
+      # because the values this catches are ones no host asked to record:
+      # `password_digest`, `token_digest`, `lookup_hash` and PKCE verifiers
+      # arriving as a side effect of a payload carrying `account:` or
+      # `session:`. Audit rows are append-only, so an unsafe default cannot be
+      # walked back — the rows already written keep whatever was in them.
+      #
+      # Set to false ONLY if an app genuinely depends on record attributes in
+      # metadata and has satisfied itself that no secret-bearing column can
+      # reach a row. Preferred alternative: keep this on and use
+      # `metadata_builder` to pull the specific attributes you want, which runs
+      # BEFORE dereferencing and still sees the record.
+      @dereference_record_metadata = true
 
       @metadata_builder = nil
 

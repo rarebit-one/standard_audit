@@ -332,6 +332,10 @@ StandardAudit.configure(baseline: true) do |config|
   # `metadata: { stripe: { client_secret: ... } }` is written intact.
   config.filter_nested_metadata = true
 
+  # Replace ActiveRecord objects in metadata with a reference instead of
+  # serialising every attribute. ON by default; see "Records in metadata".
+  config.dereference_record_metadata = true
+
   # -- Write-time hooks --
   # Run between the UUID assignment and the checksum computation, so a hook MAY
   # set a checksummed column and the row still passes `verify_chain`. No
@@ -694,6 +698,36 @@ would be kept, and nested matches that survive because
 Nested metadata is **not** redacted unless `filter_nested_metadata` is enabled
 — `metadata: { stripe: { client_secret: ... } }` passes both write paths under
 exact matching by default.
+
+### Records in metadata
+
+An ActiveRecord object appearing anywhere in metadata is replaced, by default,
+with a reference rather than a snapshot of the row:
+
+```ruby
+{ account: account }
+# => { account: { "gid" => "gid://myapp/Account/1", "type" => "Account", "id" => "1" } }
+```
+
+This applies at any depth, inside Arrays, Hashes and `ActiveRecord::Relation`s,
+on both write paths. It is on by default because key-based redaction cannot
+reach the problem: a payload key like `account:` looks like exactly the kind of
+key you want on an audit row, while the value serialises with
+`password_digest`, `token_digest`, `lookup_hash` and anything else the table
+happens to hold. Audit rows are append-only, so an unsafe default cannot be
+walked back.
+
+Records are dereferenced **after** `metadata_builder` runs, so a builder that
+needs real attributes still gets the record:
+
+```ruby
+config.metadata_builder = ->(metadata) {
+  metadata.merge(account_email: metadata[:account]&.email)
+}
+```
+
+`config.dereference_record_metadata = false` restores the pre-0.11.0 behaviour
+of writing full attributes. Prefer `metadata_builder` over turning it off.
 
 **Performance**: For high-volume applications, enable async processing and ensure your `audit_logs` table has appropriate indexes (the install generator adds them by default). Consider partitioning by `occurred_at` for very large tables.
 

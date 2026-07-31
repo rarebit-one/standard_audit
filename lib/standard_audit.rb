@@ -2,6 +2,7 @@ require "standard_audit/version"
 require "standard_audit/engine"
 require "standard_audit/configuration"
 require "standard_audit/metadata_filter"
+require "standard_audit/record_reference"
 require "standard_audit/sensitive_keys_dry_run"
 require "standard_audit/subscriber"
 require "standard_audit/event_subscriber"
@@ -53,8 +54,15 @@ module StandardAudit
       actor ||= config.current_actor_resolver.call
 
       # Redaction lives in MetadataFilter, shared with Subscriber, so the two
-      # write paths cannot drift apart.
-      filtered_metadata = MetadataFilter.call(metadata, config: config)
+      # write paths cannot drift apart. Record dereferencing is applied on both
+      # paths for the same reason: a snapshot of a whole row is as unrecoverable
+      # here as it is on the notifications path.
+      #
+      # Deliberately a separate local: the block form below re-instruments the
+      # ORIGINAL `metadata` for other subscribers, and this gem's redaction has
+      # no business rewriting what they receive.
+      dereferenced = config.dereference_record_metadata ? RecordReference.call(metadata) : metadata
+      filtered_metadata = MetadataFilter.call(dereferenced, config: config)
 
       attrs = {
         event_type: event_type,
