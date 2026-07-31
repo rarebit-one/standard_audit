@@ -130,15 +130,24 @@ module StandardAudit
         # @raise [StandardError] the original error when
         #   `config.raise_on_audit_write_error` is true
         def handle_write_error(error, action:, operation:)
+          raising = StandardAudit.config.raise_on_audit_write_error
           handler = StandardAudit.config.audit_write_error_handler
 
           if handler
             handler.call(error, action: action, operation: operation)
-          else
+          elsif !raising
+            # Deliberately NOT reported when re-raising: the caller receives the
+            # error and owns it from here. Reporting as well produced two events
+            # for one failure in every host that both sets
+            # `raise_on_audit_write_error` and reports on the error it catches —
+            # which is most hosts that set the flag at all, since the flag exists
+            # for hosts that treat an unaudited write as a failure worth
+            # handling. And a host that does NOT catch it still gets the report,
+            # via its framework's own unhandled-error path.
             report_write_error(error, action: action, operation: operation)
           end
 
-          raise error if StandardAudit.config.raise_on_audit_write_error
+          raise error if raising
 
           nil
         end
@@ -278,7 +287,8 @@ module StandardAudit
           Rails.error.report(
             error,
             handled: true,
-            context: { audit_action: action, operation: operation.class.name }
+            context: { StandardAudit.config.audit_error_context_key => action,
+                       operation: operation.class.name }
           )
         end
       end

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`config.audit_error_context_key`** (default `:audit_action`) — renames the `Rails.error.report` context key naming the audit action, without needing a whole handler. Two apps had overridden `audit_write_error_handler` for nothing but this: both tag every OTHER audit-error report site with `audit_event:` (four sites in one, twelve across ten files in the other), so adopting the gem name left the operations layer as the only place forking the convention. A handler written to rename one key also silently opts out of every future improvement to the built-in reporter.
+
+### Changed
+
+- **The built-in reporter no longer fires when `raise_on_audit_write_error` re-raises.** The caller receives the error and owns it, so reporting as well produced two events for one failure in every host that both sets the flag and reports on what it catches — which is most hosts that set it at all, since the flag exists for hosts treating an unaudited write as a failure worth handling. Two of the five apps hit this independently and each wrote a log-only handler to work around it. A host that does NOT catch the error still gets a report, via its framework unhandled-error path. An explicitly configured `audit_write_error_handler` is unaffected and still runs under either policy — only the built-in reporter steps aside.
+
 ### Fixed
 
 - **The write-site scan no longer reads comments as calls.** An operation declaring `audit_none!` that explained itself in prose naming `audit!` was flagged by `unexpected_write_sites` — a false failure, which hosts worked around by backticking the token in their own comments. Source is now lexed with `Ripper` and comment tokens dropped before scanning; a file that cannot be lexed falls back to raw source (the old behaviour). Lexing rather than stripping `#` to end-of-line, because the naive form eats `"#{interpolation}"` and `%w[#]` and would trade a false failure for a false pass.
