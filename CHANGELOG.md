@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-07-31
+
+### Security
+
+- **ActiveRecord objects in audit metadata are no longer written with all of their attributes.** Any record found in metadata — at any depth, and inside Arrays, Hashes and `ActiveRecord::Relation`s — is now replaced with a reference: `{ "gid" => "gid://app/Account/1", "type" => "Account", "id" => "1" }`. Applies to both write paths (`ActiveSupport::Notifications` and `StandardAudit.record`).
+
+  `standard_id` publishes live records under payload keys like `account:`, `current_account:`, `session:` and `code_challenge:`, and `Subscriber#extract_metadata` excluded only `actor`/`target`/`scope`/`request_id`/`ip_address`/`user_agent`/`session_id` — every other key was written whole. Confirmed present in real `audit_logs` rows: `account.password_digest`, `account.password_reset_token_digest`, `session.token_digest`, `session.lookup_hash`, `code_challenge.code`.
+
+  All three existing defences missed, each for a different reason: `sensitive_keys` matches key names exactly and the secrets are attributes *underneath* `account:`; `filter_nested_metadata` is off by default so the filter never descended to them; and `account:` does not look sensitive at the top level. This is not a redaction bug — key-based redaction is the wrong tool for a value that is an entire database row — so the value is replaced by type, before any key filtering runs.
+
+  **This fix stops the bleeding; it does not clean up.** `audit_logs` is append-only by design (`before_update` and `before_destroy` raise `ReadOnlyRecord`), so every row already written keeps its digests, for the whole of a retention window that is intentionally long. Upgrading changes only what is written from now on. Assessing and remediating existing rows is a separate, host-side exercise.
+
+  `sensitive_keys` semantics are untouched: still exact-match, still no substring mode. See rarebit-one/rarebit-ops#296.
+
+### Added
+
+- **`config.dereference_record_metadata`** (default `true`) — the escape hatch for the above. It defaults to the SAFE behaviour, unlike `filter_nested_metadata`, because the values it catches are ones no host asked to record: they arrive as a side effect of a payload carrying `account:` or `session:`, and an append-only row cannot be walked back. Set it to `false` only if an app genuinely depends on record attributes in metadata and has satisfied itself no secret-bearing column can reach a row.
+
+### Changed
+
+- **Consumer-visible beyond the secrets disappearing:** any metadata key that used to hold a record's attribute hash now holds a three-key reference, so dashboards, reports or queries reading e.g. `metadata->'account'->>'email'` will read `NULL` on new rows (old rows are unchanged, which makes the change look like a data gap rather than a schema change). Recover the specific fields you need with `metadata_builder`, which runs BEFORE dereferencing and still receives the record: `->(metadata) { metadata.merge(account_email: metadata[:account]&.email) }`. `actor`/`target`/`scope` are unaffected — they were already stored as GlobalIDs.
+
 ## [0.10.0] - 2026-07-31
 
 ### Added

@@ -79,6 +79,16 @@ module StandardAudit
         raw_metadata = config.metadata_builder.call(raw_metadata)
       end
 
+      # ActiveRecord objects in the payload are replaced by a reference BEFORE
+      # any key-based redaction, because the leak they cause is not a
+      # sensitive *key* — it is a value that serialises as an entire database
+      # row (rarebit-one/rarebit-ops#296). Runs after `metadata_builder` so a
+      # host that derives fields from a record (`payload[:account].email`)
+      # still sees the record.
+      if config.dereference_record_metadata
+        raw_metadata = StandardAudit::RecordReference.call(raw_metadata)
+      end
+
       # Redaction lives in MetadataFilter, shared with StandardAudit.record.
       # This path previously carried its own copy that did *not* subtract
       # RESERVED_METADATA_KEYS, so `_tags`/`_source` were strippable here and
