@@ -216,6 +216,59 @@ RSpec.describe StandardAudit::Operation do
       expect { run(klass, "order.created") }.to raise_error(ActiveRecord::StatementInvalid, "boom")
     end
 
+    # The caller receives the error and owns it from here, so reporting as well
+    # produced two events for one failure in every host that both sets the flag
+    # and reports on what it catches — which is most hosts that set it at all.
+    # A host that does NOT catch it still gets a report, via its framework's own
+    # unhandled-error path.
+    it "does not also report when re-raising" do
+      StandardAudit.configure { |c| c.raise_on_audit_write_error = true }
+
+      expect(Rails.error).not_to receive(:report)
+
+      expect { run(klass, "order.created") }.to raise_error(ActiveRecord::StatementInvalid)
+    end
+
+    # An explicit handler is the host's choice and runs under either policy —
+    # suppressing it when raising would silently disable routing the host asked
+    # for. Only the BUILT-IN reporter steps aside.
+    it "still runs an explicit handler when re-raising" do
+      seen = []
+      StandardAudit.configure do |c|
+        c.raise_on_audit_write_error = true
+        c.audit_write_error_handler = ->(_e, action:, operation:) { seen << action }
+      end
+
+      expect { run(klass, "order.created") }.to raise_error(ActiveRecord::StatementInvalid)
+      expect(seen).to eq(["order.created"])
+    end
+
+    # Two apps overrode the whole handler for nothing but this key, because
+    # every other audit-error report site in each app uses `audit_event:`. A
+    # handler written to rename one key also silently opts out of every future
+    # improvement to the built-in reporter.
+    describe "`audit_error_context_key`" do
+      it "defaults to :audit_action" do
+        expect(Rails.error).to receive(:report)
+          .with(anything, hash_including(context: hash_including(audit_action: "order.created")))
+
+        run(klass, "order.created")
+      end
+
+      it "renames the key without needing a handler" do
+        StandardAudit.configure { |c| c.audit_error_context_key = :audit_event }
+
+        captured = nil
+        allow(Rails.error).to receive(:report) { |_e, **kwargs| captured = kwargs[:context] }
+
+        run(klass, "order.created")
+
+        expect(captured).to include(audit_event: "order.created")
+        expect(captured).not_to have_key(:audit_action)
+        expect(captured).to include(operation: klass.name)
+      end
+    end
+
     it "routes through `audit_write_error_handler` when set" do
       seen = []
       StandardAudit.configure do |c|

@@ -10,7 +10,8 @@ module StandardAudit
                   :metadata_builder, :before_checksum_hooks,
                   :anonymizable_metadata_keys, :retention_days,
                   :audit_catalogue, :verify_audit_declarations,
-                  :raise_on_audit_write_error, :audit_write_error_handler
+                  :raise_on_audit_write_error, :audit_write_error_handler,
+                  :audit_error_context_key
 
     def initialize
       @subscriptions = []
@@ -123,6 +124,23 @@ module StandardAudit
       # Runs before `raise_on_audit_write_error` is applied, so it sees every
       # write failure under either policy.
       @audit_write_error_handler = nil
+
+      # The `Rails.error.report` context key naming the audit action, for the
+      # built-in reporter. Exists because two apps independently overrode
+      # `audit_write_error_handler` for nothing but this key: both tag every
+      # OTHER audit-error report site with `audit_event:` (four sites in one
+      # app, twelve across ten files in the other), so adopting the gem's name
+      # left the operations layer as the only place forking the convention.
+      #
+      # That divergence fails silently and asymmetrically — a saved error-tracker
+      # search grouped on the host's key keeps working and simply stops
+      # containing operation write failures. Nothing errors, nothing goes red,
+      # and the search still looks healthy.
+      #
+      # A whole handler to rename one key is a lot of ceremony, and a handler
+      # written for that reason also silently opts out of every future
+      # improvement to the built-in reporter. Default keeps existing behaviour.
+      @audit_error_context_key = :audit_action
 
       # Retention defaults from ENV so it can be set per-environment without a
       # code change. Unset/blank/non-positive => nil (infinite retention, the
