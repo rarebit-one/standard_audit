@@ -99,12 +99,46 @@ RSpec.describe StandardAudit::RecordReference do
       expect(result["_source"]).to eq("engine")
     end
 
-    it "truncates pathologically deep structures rather than recursing forever" do
+    it "marks a circular reference rather than recursing forever" do
       cyclic = {}
       cyclic[:self] = cyclic
 
       expect { described_class.call(cyclic) }.not_to raise_error
-      expect(json_of(described_class.call(cyclic))).to include("nested too deeply")
+      expect(described_class.call(cyclic)).to eq(self: described_class::CIRCULAR)
+    end
+
+    it "handles a cycle through an Array" do
+      cyclic = []
+      cyclic << cyclic
+
+      expect(described_class.call({ items: cyclic })).to eq(items: [described_class::CIRCULAR])
+    end
+
+    it "keeps deeply but finitely nested record-free metadata intact" do
+      deep = (1..30).reduce("leaf") { |inner, i| { "level_#{i}": inner } }
+
+      result = described_class.call(deep)
+
+      expect(result).to equal(deep)
+      expect(json_of(result)).to include("leaf")
+    end
+
+    it "dereferences a record buried far below any plausible depth cap" do
+      deep = (1..30).reduce({ account: user }) { |inner, i| { "level_#{i}": inner } }
+
+      serialised = json_of(described_class.call(deep))
+
+      expect(serialised).to include(user.to_global_id.to_s)
+      expect(serialised).not_to include("password_digest")
+    end
+
+    it "does not mistake a repeated (but non-circular) sibling for a cycle" do
+      shared = { account: user }
+
+      result = described_class.call({ a: shared, b: shared })
+
+      expect(result[:a]).to eq(result[:b])
+      expect(result[:a][:account]["type"]).to eq("User")
     end
   end
 
@@ -168,6 +202,12 @@ RSpec.describe StandardAudit::RecordReference do
         "gid" => user.to_global_id.to_s, "type" => "User", "id" => user.id.to_s
       )
       expect(log.metadata.to_json).not_to include("password_digest")
+    end
+
+    it "does no dereferencing in the block form, where the Subscriber writes the row" do
+      expect(StandardAudit::RecordReference).not_to receive(:call)
+
+      StandardAudit.record("audit.direct", metadata: { accounts: User.where(id: user.id) }) { :done }
     end
   end
 end

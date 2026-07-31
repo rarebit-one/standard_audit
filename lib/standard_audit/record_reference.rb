@@ -32,11 +32,13 @@ module StandardAudit
   # that have no GlobalID at all (unpersisted ones): for those, `gid` is
   # simply absent and the reference is still meaningful.
   module RecordReference
-    # Guards against self-referential metadata. Deeper than this and the
-    # structure is pathological, not audit content.
-    MAX_DEPTH = 8
-
-    TRUNCATED = "[standard_audit: metadata nested too deeply]".freeze
+    # Written in place of a container that contains itself. Depth alone is NOT
+    # used as the guard: a plain depth cap would rewrite deeply-but-finitely
+    # nested metadata that holds no records at all, and permanently lose audit
+    # content in an append-only row to protect against a structure that is
+    # merely large. Only a genuine cycle — the one thing that cannot be
+    # serialised anyway — is replaced.
+    CIRCULAR = "[standard_audit: circular reference]".freeze
 
     class << self
       # Returns a copy of `value` with every ActiveRecord object — at any
@@ -46,14 +48,27 @@ module StandardAudit
       #
       # Never mutates the input: notification payloads are shared with every
       # other subscriber.
-      def call(value, depth: 0)
-        return TRUNCATED if depth > MAX_DEPTH
+      def call(value, ancestors = nil)
         return reference_for(value) if record?(value)
-        return map_collection(value.to_a, depth) if relation?(value)
-        return map_collection(value, depth) if value.is_a?(Array)
-        return map_hash(value, depth) if hash_like?(value)
 
-        value
+        container = relation?(value) || value.is_a?(Array) || hash_like?(value)
+        return value unless container
+
+        ancestors ||= {}.compare_by_identity
+        return CIRCULAR if ancestors.key?(value)
+
+        ancestors[value] = true
+        begin
+          if relation?(value)
+            map_collection(value.to_a, ancestors)
+          elsif value.is_a?(Array)
+            map_collection(value, ancestors)
+          else
+            map_hash(value, ancestors)
+          end
+        ensure
+          ancestors.delete(value)
+        end
       end
 
       # The reference written in place of a record.
@@ -79,10 +94,10 @@ module StandardAudit
         value.respond_to?(:each_pair) && value.respond_to?(:key?)
       end
 
-      def map_collection(array, depth)
+      def map_collection(array, ancestors)
         changed = false
         mapped = array.map do |element|
-          replacement = call(element, depth: depth + 1)
+          replacement = call(element, ancestors)
           changed ||= !replacement.equal?(element)
           replacement
         end
@@ -90,7 +105,7 @@ module StandardAudit
         changed ? mapped : array
       end
 
-      def map_hash(hash, depth)
+      def map_hash(hash, ancestors)
         changed = false
         mapped = {}
 
@@ -102,7 +117,7 @@ module StandardAudit
             next
           end
 
-          replacement = call(value, depth: depth + 1)
+          replacement = call(value, ancestors)
           changed ||= !replacement.equal?(value)
           mapped[key] = replacement
         end

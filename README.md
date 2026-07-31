@@ -717,8 +717,10 @@ key you want on an audit row, while the value serialises with
 happens to hold. Audit rows are append-only, so an unsafe default cannot be
 walked back.
 
-Records are dereferenced **after** `metadata_builder` runs, so a builder that
-needs real attributes still gets the record:
+On the notifications path, records are dereferenced **after**
+`metadata_builder` runs, so a builder that needs real attributes still gets the
+record (`metadata_builder` has never applied to a direct `StandardAudit.record`
+call — pass the attributes you want in `metadata` there):
 
 ```ruby
 config.metadata_builder = ->(metadata) {

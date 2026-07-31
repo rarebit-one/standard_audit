@@ -53,14 +53,24 @@ module StandardAudit
 
       actor ||= config.current_actor_resolver.call
 
+      if block_given?
+        # Block form: instrument via ActiveSupport::Notifications and let the
+        # Subscriber write the row, which it does with its own dereferencing and
+        # filtering. Nothing built below would be used, so it is not built —
+        # dereferencing a Relation here would load it eagerly, before the block
+        # has run, purely to discard the result.
+        ActiveSupport::Notifications.instrument(event_type, metadata.merge(
+          actor: actor, target: target, scope: scope
+        )) do
+          yield
+        end
+        return
+      end
+
       # Redaction lives in MetadataFilter, shared with Subscriber, so the two
       # write paths cannot drift apart. Record dereferencing is applied on both
       # paths for the same reason: a snapshot of a whole row is as unrecoverable
       # here as it is on the notifications path.
-      #
-      # Deliberately a separate local: the block form below re-instruments the
-      # ORIGINAL `metadata` for other subscribers, and this gem's redaction has
-      # no business rewriting what they receive.
       dereferenced = config.dereference_record_metadata ? RecordReference.call(metadata) : metadata
       filtered_metadata = MetadataFilter.call(dereferenced, config: config)
 
@@ -73,16 +83,6 @@ module StandardAudit
         session_id: options[:session_id] || config.current_session_id_resolver.call,
         metadata: filtered_metadata
       }
-
-      if block_given?
-        # Block form: instrument via ActiveSupport::Notifications
-        ActiveSupport::Notifications.instrument(event_type, metadata.merge(
-          actor: actor, target: target, scope: scope
-        )) do
-          yield
-        end
-        return
-      end
 
       gid_attrs = {
         actor_gid: actor&.to_global_id&.to_s,
