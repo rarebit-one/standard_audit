@@ -8,7 +8,9 @@ module StandardAudit
                   :sensitive_keys, :sensitive_key_patterns,
                   :sensitive_key_exceptions, :filter_nested_metadata,
                   :metadata_builder, :before_checksum_hooks,
-                  :anonymizable_metadata_keys, :retention_days
+                  :anonymizable_metadata_keys, :retention_days,
+                  :audit_catalogue, :verify_audit_declarations,
+                  :raise_on_audit_write_error, :audit_write_error_handler
 
     def initialize
       @subscriptions = []
@@ -77,6 +79,50 @@ module StandardAudit
       @before_checksum_hooks = []
 
       @anonymizable_metadata_keys = %i[email name ip_address]
+
+      # ── StandardAudit::Operation (the operation-audit DSL) ────────────────
+
+      # The host's canonical action vocabulary, used by `audit!` to reject an
+      # action absent from it. Normally a CALLABLE, because referencing an
+      # autoloadable constant eagerly from an initializer pins the first-loaded
+      # copy and breaks Zeitwerk reloading:
+      #
+      #   config.audit_catalogue = -> { AuditCatalogue::ACTIONS }
+      #
+      # A plain Array is accepted when the vocabulary really is a frozen
+      # literal. `nil` (the default) skips the membership check entirely, so
+      # the DSL is adoptable before an app has a catalogue.
+      #
+      # Membership is the ONLY rule applied — see StandardAudit::Operation.
+      @audit_catalogue = nil
+
+      # Whether `audit!` verifies the declaration before writing. A callable
+      # (or a plain boolean). Defaults to local environments only: in
+      # production `audit!` just writes, because a developer's declaration
+      # mistake must not 500 a user — the host's meta-spec is the real gate.
+      @verify_audit_declarations = -> {
+        defined?(Rails) && Rails.respond_to?(:env) && Rails.env.respond_to?(:local?) && Rails.env.local?
+      }
+
+      # Whether a failed audit *write* aborts the operation. `false` (report
+      # and swallow) matches four of the five apps this DSL was extracted from.
+      # Set `true` where an unaudited state change is itself a compliance
+      # failure — one app deliberately does not rescue, and defaulting to
+      # swallow would have silently downgraded that posture.
+      #
+      # StandardAudit::Operation::DeclarationError is NEVER governed by this;
+      # it always propagates.
+      @raise_on_audit_write_error = false
+
+      # Optional callable invoked instead of the built-in logger/Rails.error
+      # reporting when an audit write fails:
+      #
+      #   config.audit_write_error_handler =
+      #     ->(error, action:, operation:) { ErrorReporting.notify(error, ...) }
+      #
+      # Runs before `raise_on_audit_write_error` is applied, so it sees every
+      # write failure under either policy.
+      @audit_write_error_handler = nil
 
       # Retention defaults from ENV so it can be set per-environment without a
       # code change. Unset/blank/non-positive => nil (infinite retention, the
