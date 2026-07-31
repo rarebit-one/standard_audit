@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-07-31
+
 ### Added
 
 - **`StandardAudit::Operation` — the operation-audit DSL, extracted from five independent copies.** Every consumer app had written the same contract by hand: `audits "x.y"` / `audit_none!` class declarations, a private `audit!(action, **attrs)` as the single write path, and a `verify_audit_declared!` guard that raises on declaration↔write drift in local environments and writes silently in production. The surface is unchanged from those copies, so operation files do not move — adopting apps swap one `include` line and delete their concern. (`rarebit-one/rarebit-ops#279`)
