@@ -162,6 +162,128 @@ This provides:
 organisation.scoped_audit_logs  # all logs scoped to this organisation
 ```
 
+## Operation Audit Contract
+
+`StandardAudit::Operation` makes an operation *declare* what it audits, so a new
+mutating operation cannot silently ship with no audit trail. It is a **module,
+not a base class** — it contributes the audit contract and nothing else (no
+`call`, no `Result`, no `execute`), so it drops into any operation style.
+
+```ruby
+class ApplicationOperation
+  include StandardAudit::Operation   # ← the whole adoption, for a shared base
+end
+
+class Orders::CreateOperation < ApplicationOperation
+  audits "order.created"
+
+  def execute
+    order = Order.create!(**attrs)
+    audit!("order.created", target: order, metadata: { total: order.total })
+  end
+end
+
+class Orders::ReindexOperation < ApplicationOperation
+  audit_none!   # projection of already-audited state
+end
+```
+
+- `audits "x.y"` — the action(s) this operation may write. Repeatable args; the
+  declaration is **not inherited**, so every leaf states its own intent.
+- `audit_none!` — mutates state but deliberately records nothing. Leave the
+  reason as a comment.
+- `audit_abstract!` — a base or intermediate class, not a real operation.
+- `audit!(action, **attrs)` — private; the single write path. Args forward
+  straight to `StandardAudit.record`. Call it inside the operation's own
+  transaction so the row commits with the state change.
+
+### Adoption shapes
+
+Both work with no configuration:
+
+1. **A shared base includes the module once**, and the real operations are its
+   subclasses (registered via `inherited`). The base declares nothing and has
+   subclasses, so it is excluded from the checks automatically. A class that
+   *did* declare is never excluded this way, so subclassing a real operation
+   cannot quietly drop it.
+2. **Every operation includes the module directly**, with no shared base
+   (registered via `included`).
+
+Both land in one registry, so a single meta-spec covers a codebase mixing them.
+
+### The catalogue
+
+The gem has no knowledge of your action vocabulary. Declare it as a **callable** —
+referencing an autoloadable constant eagerly from an initializer pins the
+first-loaded copy and breaks Zeitwerk reloading:
+
+```ruby
+StandardAudit.configure(baseline: true) do |config|
+  config.audit_catalogue = -> { AuditCatalogue::ACTIONS }
+end
+```
+
+`nil` (the default) skips the membership check entirely, so the DSL is adoptable
+before you have a catalogue. **Membership is the only rule** — there is no
+dot-count, case, prefix, or namespace validation, because an action may
+legitimately carry a notification-bus namespace verbatim.
+
+### Error policy
+
+`StandardAudit::Operation::DeclarationError` — a declaration↔write mismatch —
+**always propagates**, ahead of any generic rescue. It is raised in local
+environments only (`config.verify_audit_declarations`); in production `audit!`
+just writes, because a developer's mistake must not 500 a user. The meta-spec is
+the real gate.
+
+A genuine **write** failure is governed by config:
+
+```ruby
+config.raise_on_audit_write_error = true   # default false: report and swallow
+config.audit_write_error_handler  = ->(error, action:, operation:) { ... }
+```
+
+Default `false` matches most apps, but set it `true` where an unaudited state
+change is itself a compliance failure — the audit write then aborts the
+operation.
+
+### The meta-spec
+
+The analysis is **plain Ruby**, so you can assert on it however you like:
+
+```ruby
+StandardAudit::Operation::Audit.operations(source: "/app/operations/")
+StandardAudit::Operation::Audit.undeclared            # => [Class, ...]
+StandardAudit::Operation::Audit.unknown_actions       # => { Class => ["x.y"] }
+StandardAudit::Operation::Audit.orphan_actions(within: ...)
+StandardAudit::Operation::Audit.missing_write_sites   # declares but never writes
+StandardAudit::Operation::Audit.unexpected_write_sites
+StandardAudit::Operation::Audit.duplicate_catalogue_entries
+```
+
+A thin RSpec layer over exactly those predicates:
+
+```ruby
+require "standard_audit/rspec/operation"
+
+RSpec.describe "Operation audit declarations" do
+  it_behaves_like "standard_audit operation declarations",
+    source:         "/app/operations/",
+    minimum:        100,
+    expected:       %w[Orders::CreateOperation],
+    orphans_within: -> { AuditCatalogue::OPERATION_ACTIONS }
+end
+```
+
+**Set `minimum:`.** It is the only example that fails when someone stops
+including the module or eager loading stops reaching your operations — every
+other example passes vacuously against an empty set. `orphans_within:` is the
+catalogue slice operations own; pass it when your catalogue also covers writers
+outside `app/operations/`, which would otherwise always look orphaned.
+
+The registry can only see loaded classes, so the shared example calls
+`Rails.application.eager_load!` by default (`eager_load: false` to opt out).
+
 ## Configuration Reference
 
 Use `configure(baseline: true)` in your initializer. It remembers the block so
@@ -217,6 +339,23 @@ StandardAudit.configure(baseline: true) do |config|
   # the audit write. Not run on the batched `insert_all!` path.
   config.before_checksum { |log| log.scope = MyApp.derive_scope(log) }
   config.before_checksum :backfill_scope   # an AuditLog instance method
+
+  # -- Operation audit contract (StandardAudit::Operation) --
+  # Your action vocabulary, as a CALLABLE so Zeitwerk can reload it. nil (the
+  # default) skips the membership check entirely.
+  config.audit_catalogue = -> { AuditCatalogue::ACTIONS }
+
+  # Whether `audit!` verifies declarations before writing. Callable or boolean;
+  # defaults to local environments only.
+  config.verify_audit_declarations = -> { Rails.env.local? }
+
+  # Whether a failed audit WRITE aborts the operation. Default false (report and
+  # swallow). Set true where an unaudited state change is a compliance failure.
+  # DeclarationError always propagates regardless.
+  config.raise_on_audit_write_error = false
+  config.audit_write_error_handler = ->(error, action:, operation:) {
+    ErrorReporting.notify(error, component: "operation_audit", audit_action: action)
+  }
 
   # -- Metadata Builder --
   # Optional proc to transform metadata before storage.

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`StandardAudit::Operation` — the operation-audit DSL, extracted from five independent copies.** Every consumer app had written the same contract by hand: `audits "x.y"` / `audit_none!` class declarations, a private `audit!(action, **attrs)` as the single write path, and a `verify_audit_declared!` guard that raises on declaration↔write drift in local environments and writes silently in production. The surface is unchanged from those copies, so operation files do not move — adopting apps swap one `include` line and delete their concern. (`rarebit-one/rarebit-ops#279`)
+  - It is a **module, never a base class**. The five host `ApplicationOperation`s range 61–303 lines and diverge deliberately (one refuses a `Result`/`execute` lifecycle; one app has no shared base at all), so the module contributes the audit contract and nothing else.
+  - **Both adoption shapes work with no configuration**: a shared base that includes it once, whose subclasses are the real operations, and standalone leaves that each include it directly. The unifier is that a class declaring nothing *and* having subclasses is treated as a base and excluded — so a shared base auto-excludes, while every leaf is retained. A class that did declare is never excluded that way.
+  - `audit_abstract!` for an intermediate class the automatic rule can't see (typically one with no subclasses yet).
+- **`config.audit_catalogue`** — the host's action vocabulary, as a **callable** (`-> { AuditCatalogue::ACTIONS }`); referencing an autoloadable constant eagerly from an initializer breaks Zeitwerk reloading. A plain Array is accepted for a frozen literal. `nil` (the default) skips the membership check, so the DSL is adoptable before an app has a catalogue. **Membership is the only rule applied** — no dot-count, case, prefix, or namespace validation, because an action may legitimately carry a notification-bus namespace verbatim and normalising it would orphan historical rows.
+- **`config.raise_on_audit_write_error`** (default `false`) and **`config.audit_write_error_handler`**. Four of the five apps report-and-swallow a failed audit write; one deliberately does not rescue, because for it an unaudited state change is itself a compliance failure. A swallow-only module would have silently downgraded that posture. `StandardAudit::Operation::DeclarationError` is never governed by either — it always re-raises, ahead of any generic rescue.
+- **`config.verify_audit_declarations`** (callable or boolean, default: local environments only) — gates the dev/test guard.
+- **Meta-spec logic as plain Ruby predicates** on `StandardAudit::Operation::Audit`: `.operations(source:)`, `.undeclared`, `.unknown_actions`, `.orphan_actions(within:)`, `.missing_write_sites`, `.unexpected_write_sites`, `.duplicate_catalogue_entries`, `.declared_actions`. Each takes an explicit `operations:` list, so hosts can write bespoke assertions.
+- **`standard_audit/rspec/operation`** — a thin RSpec shared-example layer over those predicates, with no logic of its own. It carries a **`minimum:` registry floor**, the one example that catches "someone stopped including the module" or "eager loading stopped reaching the operations"; without it every other example passes vacuously against an empty set. Also `expected:`, `source:` scoping, and `orphans_within:` for hosts whose catalogue covers writers outside `app/operations/`.
+
+Everything is additive and nothing includes the module by default — existing hosts upgrade with no code change.
+
 ## [0.8.0] - 2026-07-30
 
 ### Added

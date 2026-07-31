@@ -50,7 +50,10 @@ standard_audit/
 │   ├── reference_preloading.rb       # Batch actor/target/scope GID resolution
 │   ├── event_subscriber.rb           # Rails.event subscriber (8.1+)
 │   ├── subscriber.rb                 # AS::Notifications subscriber
+│   ├── operation.rb                  # Operation audit DSL (audits / audit_none! / audit!)
+│   ├── operation/audit.rb            # Registry, catalogue, policy, meta-spec predicates
 │   ├── rspec.rb                      # RSpec auto-cleanup plugin
+│   ├── rspec/operation.rb            # Shared examples over Operation::Audit
 │   └── version.rb
 ├── lib/generators/standard_audit/
 │   ├── install/                      # `rails g standard_audit:install`
@@ -86,6 +89,45 @@ suite that installs `standard_audit/rspec` without a baseline silently
 loses its write-time hooks after the first example, and the specs that
 would notice pass vacuously. `reset_configuration!(replay_baseline: false)`
 and `clear_baseline_configuration!` exist for the gem's own specs.
+
+### Operation audit contract
+
+`StandardAudit::Operation` is the DSL that was independently written in all
+five consumer apps and extracted in 0.9.0. Non-negotiable design points, each
+of which a host depended on:
+
+- **It is a module, never a base class.** The five host `ApplicationOperation`
+  classes range 61–303 lines and diverge deliberately — one explicitly refuses
+  a `Result`/`execute` lifecycle, and one app has no shared base at all. This
+  module contributes the audit contract and nothing else. **Never add a
+  lifecycle to it.**
+- **Two adoption shapes, no host configuration.** A shared base including it
+  once (leaves registered via `inherited`), and leaves including it directly
+  (via `included`). The unifier is that a class which declares NOTHING and HAS
+  subclasses is treated as a base and excluded. A class that *did* declare is
+  never excluded that way, so subclassing a real operation cannot silently drop
+  it from the check. The rule only sees LOADED subclasses, hence the
+  eager-load in the shared examples.
+- **`@audit_spec` is a class-level ivar and is deliberately NOT inherited.** A
+  leaf inheriting its parent's declaration would pass the meta-spec while
+  writing nothing.
+- **The catalogue is host-declared, and a callable.** The gem has no knowledge
+  of any publisher gem's or app's vocabulary. A callable, not a constant,
+  because eagerly referencing an autoloadable constant from an initializer
+  breaks Zeitwerk reloading. `nil` = check skipped.
+- **Membership is the only validation.** No dot-count, case, prefix, or
+  namespace rule — one host's catalogue carries notification-bus names
+  verbatim, and normalising them would orphan historical rows.
+- **`DeclarationError` always re-raises**, ahead of any generic rescue and
+  regardless of `raise_on_audit_write_error`. Write failures follow
+  `raise_on_audit_write_error` (default false); it exists because one app
+  deliberately does not rescue, and a swallow-only module would have silently
+  downgraded its compliance posture.
+- The meta-spec logic lives in **plain-Ruby predicates** on
+  `StandardAudit::Operation::Audit`; `standard_audit/rspec/operation` is a thin
+  shared-example layer with no logic of its own. The `minimum:` registry floor
+  is the one example that catches "someone stopped including the module" —
+  every other example passes vacuously against an empty set.
 
 ### before_checksum hooks
 
@@ -323,7 +365,10 @@ serialising actor/target/scope as GID strings and resolving them inside
 | `lib/standard_audit/subscriber.rb`                  | `AS::Notifications` subscriber                  |
 | `lib/standard_audit/event_subscriber.rb`            | `Rails.event` subscriber (8.1+)                 |
 | `lib/standard_audit/reference_preloading.rb`        | Batch actor/target/scope GID resolution + memo   |
+| `lib/standard_audit/operation.rb`                   | Operation audit DSL — a module, never a base class |
+| `lib/standard_audit/operation/audit.rb`             | Registry, catalogue resolver, write-error policy, predicates |
 | `lib/standard_audit/rspec.rb`                       | RSpec auto-cleanup plugin                       |
+| `lib/standard_audit/rspec/operation.rb`             | Shared examples over `Operation::Audit`         |
 | `app/models/standard_audit/audit_log.rb`            | Core model, scopes, checksum chain, GDPR        |
 | `app/jobs/standard_audit/create_audit_log_job.rb`   | Async write path                                |
 | `app/jobs/standard_audit/cleanup_job.rb`            | Retention cleanup                               |
