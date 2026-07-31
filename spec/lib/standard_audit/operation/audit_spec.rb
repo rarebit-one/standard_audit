@@ -185,6 +185,33 @@ RSpec.describe StandardAudit::Operation::Audit do
       expect(described_class.unexpected_write_sites(operations: [Orders::ReindexOperation]))
         .to be_empty
     end
+
+    # Regression: until 0.9.1 the scan read raw source, so an `audit_none!`
+    # operation that *explained itself* in prose naming the write path was
+    # flagged. Hosts worked around it by backticking the token in their own
+    # comments — the gem dictating comment style to appease a static check.
+    it "does not flag a documented `audit_none!` operation whose comments name audit!" do
+      expect(described_class.unexpected_write_sites(operations: [DocumentedNoneOperation]))
+        .to be_empty
+    end
+  end
+
+  describe ".strip_comments (via the write-site scan)" do
+    # The naive fix — deleting `#` to end-of-line — would trade this false
+    # failure for a false pass by eating `"#{interpolation}"` and `%w[#]`.
+    # DocumentedNoneOperation contains both, so a broken stripper corrupts its
+    # source and the example above stops meaning what it claims.
+    it "leaves interpolation and percent-literals intact" do
+      stripped = described_class.send(:source_for, DocumentedNoneOperation)
+
+      expect(stripped).to include('"#{name} deleted"')
+      expect(stripped).to include("%w[# ok]")
+      expect(stripped).not_to include("no direct")
+    end
+
+    it "falls back to raw source rather than raising when a file cannot be lexed" do
+      expect(described_class.send(:strip_comments, "def broken(")).to eq("def broken(")
+    end
   end
 
   describe ".declared_actions" do

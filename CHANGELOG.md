@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The write-site scan no longer reads comments as calls.** An operation declaring `audit_none!` that explained itself in prose naming `audit!` was flagged by `unexpected_write_sites` — a false failure, which hosts worked around by backticking the token in their own comments. Source is now lexed with `Ripper` and comment tokens dropped before scanning; a file that cannot be lexed falls back to raw source (the old behaviour). Lexing rather than stripping `#` to end-of-line, because the naive form eats `"#{interpolation}"` and `%w[#]` and would trade a false failure for a false pass.
+- **Corrected a docstring that was wrong for half its own surface.** It claimed the source-scanning predicates "err towards a false pass rather than a false failure". That held only for `missing_write_sites`; in the `unexpected_write_sites` direction the same match produced a false failure. Worse than the bug itself, since it told anyone hitting the failure not to suspect the scanner.
+
 ## [0.9.0] - 2026-07-31
 
 ### Added
