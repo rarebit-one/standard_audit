@@ -1,3 +1,5 @@
+require "ripper"
+
 module StandardAudit
   module Operation
     # The registry, the catalogue resolver, the write-error policy, and the
@@ -19,10 +21,20 @@ module StandardAudit
       #
       # The scan is FILE-scoped, not class-scoped — two operations defined in
       # one file share a verdict. Zeitwerk requires one class per file in a
-      # real app, so this only matters for fixtures. A commented-out or
-      # documented `audit!` in the same file also counts as a write site; the
-      # predicates deliberately err towards a false pass rather than a false
-      # failure, since the runtime guard is the authoritative check.
+      # real app, so this only matters for fixtures.
+      #
+      # Comments are stripped before scanning (see .strip_comments), so a
+      # documented or commented-out `audit!` is not a write site. Until 0.9.1
+      # it was, and the docstring here claimed the predicates "err towards a
+      # false pass rather than a false failure" — which was only ever true of
+      # {.missing_write_sites}. In the {.unexpected_write_sites} direction the
+      # same match produces a false FAILURE, so an `audit_none!` class that
+      # explained itself in prose failed the check. The claim was wrong for
+      # half its own surface, which is worse than the bug: it told anyone
+      # hitting the failure not to suspect the scanner.
+      #
+      # What remains genuinely heuristic: a string literal containing `audit!`
+      # still counts, and the runtime guard is still the authoritative check.
       WRITE_SITE_PATTERN = /(?<![\w.:])audit!\s*(?:\(|["':@$\w])/
 
       class << self
@@ -228,7 +240,29 @@ module StandardAudit
           path = source_path(klass)
           return nil unless path && File.exist?(path)
 
-          File.read(path)
+          strip_comments(File.read(path))
+        end
+
+        # Comments are not write sites. Scanning raw source made a class that
+        # declares `audit_none!` and *explains why* in prose ("No direct audit!
+        # here") fail `unexpected_write_sites` — the scanner matched the word in
+        # the comment. That is a false failure, and it forced hosts to backtick
+        # the token in their own comments to appease a static check.
+        #
+        # Lexing rather than regex-stripping `#` to end-of-line, because the
+        # naive form eats `"#{interpolation}"` and `%w[#]`, which would trade a
+        # false failure for a false pass. A file Ripper cannot lex (syntax the
+        # running Ruby doesn't accept) falls back to the raw source: the old
+        # behaviour, which is conservative in the `audits` direction.
+        def strip_comments(src)
+          tokens = Ripper.lex(src)
+          return src if tokens.nil?
+
+          tokens.reject { |(_pos, type, _tok, _state)| type == :on_comment }
+                .map { |(_pos, _type, tok, _state)| tok }
+                .join
+        rescue StandardError
+          src
         end
 
         def subclassed?(klass)
