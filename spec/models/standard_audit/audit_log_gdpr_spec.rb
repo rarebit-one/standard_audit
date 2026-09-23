@@ -127,6 +127,75 @@ RSpec.describe StandardAudit::AuditLog, "GDPR", type: :model do
     end
   end
 
+  describe "subject forms" do
+    it "anonymizes by GlobalID string" do
+      log = create_log(actor: user, ip_address: "10.0.0.1")
+
+      count = described_class.anonymize_actor!(user.to_global_id.to_s)
+
+      expect(count).to eq(1)
+      expect(log.reload.actor_gid).to eq("[anonymized]")
+      expect(log.ip_address).to be_nil
+    end
+
+    it "anonymizes by GlobalID object" do
+      log = create_log(target: user)
+
+      described_class.anonymize_actor!(user.to_global_id)
+
+      expect(log.reload.target_gid).to eq("[anonymized]")
+    end
+
+    it "anonymizes by GlobalID string after the subject row is deleted" do
+      log = create_log(actor: user)
+      gid = user.to_global_id.to_s
+      user.destroy!
+
+      expect(described_class.anonymize_actor!(gid)).to eq(1)
+      expect(log.reload.actor_gid).to eq("[anonymized]")
+    end
+
+    it "anonymizes the same rows whichever form is given" do
+      create_log(actor: user, metadata: { "email" => "a@example.com", "action" => "x" })
+      from_record = described_class.export_for_actor(user)[:records]
+
+      described_class.anonymize_actor!(user.to_global_id.to_s)
+
+      expect(from_record.size).to eq(1)
+      expect(described_class.where(actor_gid: "[anonymized]").pluck(:metadata)).to eq([{ "action" => "x" }])
+    end
+
+    it "exports by GlobalID string and GlobalID object" do
+      create_log(actor: user, event_type: "user.login")
+      create_log(actor: other_user)
+
+      [user.to_global_id.to_s, user.to_global_id].each do |subject|
+        export = described_class.export_for_actor(subject)
+        expect(export[:subject]).to eq(user.to_global_id.to_s)
+        expect(export[:total_records]).to eq(1)
+      end
+    end
+
+    it "exports by GlobalID string after the subject row is deleted" do
+      create_log(actor: user)
+      gid = user.to_global_id.to_s
+      user.destroy!
+
+      expect(described_class.export_for_actor(gid)[:total_records]).to eq(1)
+    end
+
+    ["not-a-gid", "", "User/1"].each do |bad|
+      it "raises ArgumentError for invalid string #{bad.inspect}" do
+        expect { described_class.anonymize_actor!(bad) }.to raise_error(ArgumentError, /GlobalID/)
+        expect { described_class.export_for_actor(bad) }.to raise_error(ArgumentError, /GlobalID/)
+      end
+    end
+
+    it "raises ArgumentError for nil" do
+      expect { described_class.anonymize_actor!(nil) }.to raise_error(ArgumentError)
+    end
+  end
+
   describe ".export_for_actor" do
     it "includes logs as both actor and target" do
       create_log(actor: user, event_type: "user.login")

@@ -92,8 +92,11 @@ module StandardAudit
 
     # -- GDPR methods --
 
-    def self.anonymize_actor!(record)
-      gid = record.to_global_id.to_s
+    # `subject` may be a record, a GlobalID, or a GlobalID string
+    # ("gid://app/User/1"). A string is parsed, never located, so erasure and
+    # export still work after the subject's own row has been deleted.
+    def self.anonymize_actor!(subject)
+      gid = subject_gid_for(subject)
       logs = where("actor_gid = ? OR target_gid = ?", gid, gid)
       count = logs.count
 
@@ -122,8 +125,8 @@ module StandardAudit
       count
     end
 
-    def self.export_for_actor(record)
-      gid = record.to_global_id.to_s
+    def self.export_for_actor(subject)
+      gid = subject_gid_for(subject)
       logs = where("actor_gid = ? OR target_gid = ?", gid, gid).chronological
 
       records = logs.map do |log|
@@ -148,6 +151,22 @@ module StandardAudit
         records: records
       }
     end
+
+    # Normalises a GDPR subject to its GlobalID string. Parses rather than
+    # locates, so it works when the subject's row no longer exists.
+    def self.subject_gid_for(subject)
+      gid =
+        case subject
+        when GlobalID then subject
+        when String then GlobalID.parse(subject)
+        else subject.respond_to?(:to_global_id) ? subject.to_global_id : nil
+        end
+
+      raise ArgumentError, "expected a record, a GlobalID, or a GlobalID string (gid://app/Model/id), got #{subject.inspect}" unless gid
+
+      gid.to_s
+    end
+    private_class_method :subject_gid_for
 
     # Recomputes the checksum from the record's current field values and the
     # given previous checksum. Useful for verification without saving.

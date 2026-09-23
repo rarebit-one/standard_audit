@@ -1,16 +1,44 @@
+module StandardAudit
+  module RakeSupport
+    module_function
+
+    # Resolves the retention window for cleanup/archive: the task argument,
+    # else config.retention_days, else abort. nil retention means "keep
+    # forever", so there is deliberately no hard-coded fallback. Anything that
+    # is not a positive integer aborts — `cleanup[abc]` used to become 0 days,
+    # i.e. delete everything.
+    def resolve_days!(task_name, arg)
+      raw = arg.presence || StandardAudit.config.retention_days
+
+      if raw.nil?
+        abort "standard_audit:#{task_name}: no retention window. Pass days " \
+              "(rake \"standard_audit:#{task_name}[90]\") or set config.retention_days " \
+              "/ STANDARD_AUDIT_RETENTION_DAYS. A nil retention_days means keep forever."
+      end
+
+      days = Integer(raw.to_s.strip, 10, exception: false)
+      unless days&.positive?
+        abort "standard_audit:#{task_name}: days must be a positive integer, got #{raw.inspect}"
+      end
+
+      days
+    end
+  end
+end
+
 namespace :standard_audit do
-  desc "Delete audit logs older than specified days (default: 90)"
+  desc "Delete audit logs older than N days (default: config.retention_days; aborts if neither is set)"
   task :cleanup, [:days] => :environment do |_t, args|
-    days = (args[:days] || StandardAudit.config.retention_days || 90).to_i
+    days = StandardAudit::RakeSupport.resolve_days!("cleanup", args[:days])
     cutoff = days.days.ago
 
     deleted = StandardAudit::AuditLog.where("occurred_at < ?", cutoff).delete_all
     puts "Deleted #{deleted} audit logs older than #{days} days"
   end
 
-  desc "Archive audit logs to JSON file"
+  desc "Archive audit logs older than N days to a JSON file (default: config.retention_days; aborts if neither is set)"
   task :archive, [:days, :output] => :environment do |_t, args|
-    days = (args[:days] || 90).to_i
+    days = StandardAudit::RakeSupport.resolve_days!("archive", args[:days])
     output = args[:output] || "audit_logs_archive_#{Date.current}.json"
     cutoff = days.days.ago
 
