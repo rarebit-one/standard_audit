@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-09-24
+
+### Fixed
+
+- **`rake standard_audit:anonymize_actor[gid]` and `standard_audit:export_actor[gid]` no longer raise `NoMethodError`.** The tasks passed the GlobalID string straight into `AuditLog.anonymize_actor!` / `export_for_actor`, which called `to_global_id` on it. Both methods now accept a record, a `GlobalID`, or a GlobalID string. A string is parsed, not located, so erasure works after the subject's row has been deleted; an invalid string raises `ArgumentError`. What gets anonymized is unchanged.
+- **`rake standard_audit:cleanup` no longer deletes logs older than 90 days when `retention_days` is nil.** nil means keep forever, but the task fell back to a hard-coded 90. `cleanup` and `archive` (which always defaulted to 90) now take the days argument, else `config.retention_days`, else abort with a message saying how to set one.
+- **`cleanup`/`archive` reject a days value that is not a positive integer.** `cleanup[abc]` used to become `0` days, i.e. delete every row. `0`, negatives and non-numeric values now abort. `StandardAudit::CleanupJob` is unchanged.
+- **`StandardAudit::Subscriber` and `StandardAudit::EventSubscriber` report swallowed errors to `Rails.error`.** A failed audit write was only logged, so it never reached error tracking. It is now also reported with `handled: true` and context `{ <config.audit_error_context_key> => event_name, subscriber: <class name> }`. The log line is kept.
+
 ## [0.11.0] - 2026-07-31
 
 ### Security

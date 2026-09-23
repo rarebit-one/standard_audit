@@ -148,6 +148,37 @@ RSpec.describe StandardAudit::Subscriber do
       expect(Rails.logger).to have_received(:error).with(/StandardAudit.*DB error/)
     end
 
+    it "reports swallowed errors to Rails.error as handled" do
+      error = StandardError.new("DB error")
+      allow(StandardAudit::AuditLog).to receive(:new).and_raise(error)
+      allow(Rails.logger).to receive(:error)
+      allow(Rails.error).to receive(:report)
+
+      ActiveSupport::Notifications.instrument("audit.test", { actor: user })
+
+      expect(Rails.error).to have_received(:report).with(
+        error,
+        handled: true,
+        context: { audit_action: "audit.test", subscriber: "StandardAudit::Subscriber" }
+      )
+      expect(Rails.logger).to have_received(:error).with(/StandardAudit.*DB error/)
+    end
+
+    it "honours config.audit_error_context_key in the report context" do
+      StandardAudit.config.audit_error_context_key = :audit_event
+      allow(StandardAudit::AuditLog).to receive(:new).and_raise(StandardError, "DB error")
+      allow(Rails.logger).to receive(:error)
+      allow(Rails.error).to receive(:report)
+
+      ActiveSupport::Notifications.instrument("audit.test", { actor: user })
+
+      expect(Rails.error).to have_received(:report).with(
+        an_instance_of(StandardError),
+        handled: true,
+        context: hash_including(audit_event: "audit.test")
+      )
+    end
+
     it "uses custom metadata_builder when configured" do
       StandardAudit.config.metadata_builder = ->(raw) {
         raw.merge(custom_key: "added_by_builder")

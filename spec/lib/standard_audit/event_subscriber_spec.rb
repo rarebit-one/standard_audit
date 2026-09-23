@@ -172,6 +172,37 @@ RSpec.describe StandardAudit::EventSubscriber, skip: !Rails.respond_to?(:event) 
       expect(Rails.logger).to have_received(:error).with(/StandardAudit.*boom/)
     end
 
+    it "reports swallowed errors to Rails.error as handled" do
+      error = StandardError.new("boom")
+      allow(StandardAudit::AuditLog).to receive(:new).and_raise(error)
+      allow(Rails.logger).to receive(:error)
+      allow(Rails.error).to receive(:report)
+
+      Rails.event.notify("audit.event.err", actor: user)
+
+      expect(Rails.error).to have_received(:report).with(
+        error,
+        handled: true,
+        context: { audit_action: "audit.event.err", subscriber: "StandardAudit::EventSubscriber" }
+      )
+      expect(Rails.logger).to have_received(:error).with(/StandardAudit.*boom/)
+    end
+
+    it "honours config.audit_error_context_key in the report context" do
+      StandardAudit.config.audit_error_context_key = :audit_event
+      allow(StandardAudit::AuditLog).to receive(:new).and_raise(StandardError, "boom")
+      allow(Rails.logger).to receive(:error)
+      allow(Rails.error).to receive(:report)
+
+      Rails.event.notify("audit.event.err", actor: user)
+
+      expect(Rails.error).to have_received(:report).with(
+        an_instance_of(StandardError),
+        handled: true,
+        context: hash_including(audit_event: "audit.event.err")
+      )
+    end
+
     it "applies metadata_builder before sensitive filtering" do
       StandardAudit.config.metadata_builder = ->(raw) { raw.merge(builder_added: true) }
 

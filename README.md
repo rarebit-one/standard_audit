@@ -499,6 +499,16 @@ This:
 - Clears `ip_address`, `user_agent`, and `session_id`
 - Removes metadata keys listed in `anonymizable_metadata_keys`
 
+Both `anonymize_actor!` and `export_for_actor` accept the subject as a record,
+a `GlobalID`, or a GlobalID string (`"gid://myapp/User/123"`). A string is
+parsed, never located, so erasure still works after the user's own row has been
+deleted — the usual order for an erasure request. Anything that is not a valid
+GlobalID raises `ArgumentError`.
+
+```ruby
+StandardAudit::AuditLog.anonymize_actor!("gid://myapp/User/123")
+```
+
 ### Right to Access (Export)
 
 Export all audit data for a specific user:
@@ -525,7 +535,9 @@ STANDARD_AUDIT_RETENTION_DAYS=365   # keep 365 days
 ```
 
 Infinite retention (the default) is the compliance-safe behavior: nothing is
-ever auto-deleted. For financial/legal domains that is usually what you want;
+ever auto-deleted. The `standard_audit:cleanup` and `standard_audit:archive`
+rake tasks respect this: with no days argument and a nil `retention_days` they
+abort rather than fall back to a default window. For financial/legal domains that is usually what you want;
 enabling a finite window is a deliberate decision.
 
 ### Production retention warning (StandardHealth)
@@ -635,10 +647,12 @@ rake standard_audit:verify
 # Record the parent digest each existing row was signed against
 rake standard_audit:relink_checksums
 
-# Delete logs older than N days (default: retention_days config or 90)
+# Delete logs older than N days
 rake standard_audit:cleanup[180]
+# ...or older than config.retention_days
+rake standard_audit:cleanup
 
-# Archive old logs to a JSON file before deleting
+# Archive old logs to a JSON file before deleting (same days rules)
 rake standard_audit:archive[90,audit_backup.json]
 
 # Show statistics
@@ -650,6 +664,15 @@ rake "standard_audit:anonymize_actor[gid://myapp/User/123]"
 # GDPR: export all logs for an actor
 rake "standard_audit:export_actor[gid://myapp/User/123,export.json]"
 ```
+
+`cleanup` and `archive` take the window from the days argument, else
+`config.retention_days`; if neither is set they abort (a nil `retention_days`
+means keep forever, so there is no implicit 90-day default). Days must be a
+positive integer — `0`, negatives and non-numeric values abort instead of
+deleting everything.
+
+`anonymize_actor` and `export_actor` take a GlobalID string and work even after
+the user record has been deleted.
 
 ## Database Support
 
