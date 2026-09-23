@@ -48,9 +48,26 @@ module StandardAudit
       )
     rescue => e
       Rails.logger.error("[StandardAudit] Error handling Rails.event: #{e.class}: #{e.message}")
+      report_error(e, name)
     end
 
     private
+
+    # The event handler rescues so a failed audit write cannot break the
+    # instrumented code path, but a log line alone is invisible to error
+    # tracking — so report it as handled too.
+    def report_error(error, event_name)
+      return unless Rails.respond_to?(:error) && Rails.error
+
+      Rails.error.report(
+        error,
+        handled: true,
+        context: { StandardAudit.config.audit_error_context_key => event_name,
+                   subscriber: self.class.name }
+      )
+    rescue => report_failure
+      Rails.logger.error("[StandardAudit] Error reporting audit failure: #{report_failure.class}: #{report_failure.message}")
+    end
 
     def matches_subscription?(name)
       StandardAudit.config.subscriptions.any? { |pattern| pattern_match?(pattern, name) }
