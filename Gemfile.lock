@@ -2,9 +2,9 @@ PATH
   remote: .
   specs:
     standard_audit (0.13.0)
-      activejob (>= 8.0)
-      activerecord (>= 8.0)
-      activesupport (>= 8.0)
+      activejob (>= 8.1)
+      activerecord (>= 8.1)
+      activesupport (>= 8.1)
       globalid (>= 1.0)
 
 GEM

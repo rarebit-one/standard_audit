@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Requires Rails 8.1** (`activerecord`, `activejob`, `activesupport` `>= 8.1`,
+  was `>= 8.0`). Every consumer app runs 8.1; 8.0 was never exercised in CI.
+
 ## [0.13.0] - 2026-09-24
 
 The Phase 4 release. It removes what 0.12 deprecated, the empty engine
