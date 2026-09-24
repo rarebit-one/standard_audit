@@ -98,6 +98,31 @@ StandardAudit.record("orders.created",
 
 When `actor` is omitted, it falls back to the configured `current_actor_resolver` (which reads `Current.account`, then `Current.user`, by default).
 
+#### Non-fatal writes: `raise: false`
+
+Where a missing audit row must never break the request — logging an
+authentication failure, say — pass `raise: false`. A failed write is logged,
+reported to `Rails.error` as handled (context
+`{ <audit_error_context_key> => event_type, source: "StandardAudit.record" }`),
+and `record` returns nil:
+
+```ruby
+StandardAudit.record("auth.token_invalid",
+  actor: token,
+  metadata: { error_code: "AUTH_001", path: request.path },
+  raise: false)
+```
+
+The default is `raise: true` (unchanged). In block form the option only
+governs the audit write; errors from your block always propagate.
+
+**Replace your host code with** `raise: false`. It supersedes the
+`AuditAuthFailure#record_auth_failure` rescue-and-report wrapper
+(sidekick-web, luminality-web, nutripod-web
+`app/controllers/concerns/audit_auth_failure.rb`); set
+`config.audit_error_context_key = :audit_event` to keep those apps' Sentry
+grouping key.
+
 ### ActiveSupport::Notifications
 
 For Rails < 8.1, or when `Rails.event` is unavailable, instrument events via `ActiveSupport::Notifications`:
@@ -153,7 +178,6 @@ It runs after the `Current` resolvers and `metadata_builder`, and **before**
 dereferencing and `sensitive_keys` redaction, so anything it injects is still
 filtered. Mutate `entry` in place; the return value is ignored. Raising aborts
 the write: direct callers see the error, the subscribers rescue and report it.
-Unlike `before_checksum`, it also runs on batched writes.
 
 **Replace your host code with** a `before_write`. It supersedes:
 
@@ -325,6 +349,69 @@ outside `app/operations/`, which would otherwise always look orphaned.
 The registry can only see loaded classes, so the shared example calls
 `Rails.application.eager_load!` by default (`eager_load: false` to opt out).
 
+## Testing
+
+```ruby
+# spec/rails_helper.rb
+require "standard_audit/rspec"
+```
+
+This resets StandardAudit state before every example (so declare your
+configuration with `configure(baseline: true)`), and loads two helpers. Each is
+also loadable on its own: `standard_audit/rspec/matchers`,
+`standard_audit/rspec/baseline`.
+
+### `have_audited`
+
+```ruby
+expect { Orders::Create.call(order) }
+  .to have_audited("order.created")
+  .by(account)                    # a record, an RSpec matcher, or no arg = "any resolvable actor"
+  .on(order)                      # target, same forms
+  .within(organisation)           # scope, same forms
+  .with_metadata(total: 100, tags: include("vip"))  # subset; values may be matchers
+  .once                           # or .times(n); default "at least one"
+
+expect { noop }.not_to have_audited("order.created")
+```
+
+Only rows persisted during the block count. On failure it lists the rows that
+were written, so a wrong actor or metadata shows up directly.
+
+**Replace your host code with** `have_audited`. It supersedes hand-rolled
+helpers such as `expect_well_formed_audit(action)` (sidekick-web
+`spec/support/audit_log_coverage.rb`) — the equivalent is
+`have_audited(action).by.on` — and the
+`change(StandardAudit::AuditLog, :count)` + `AuditLog.last` pairs across the
+five apps' coverage specs.
+
+### `"a standard_audit baseline"`
+
+Guards that your configuration survives the per-example reset:
+
+```ruby
+RSpec.describe "StandardAudit configuration baseline" do
+  it_behaves_like "a standard_audit baseline",
+    subscriptions: [/\Astandard_id\./, /\Aauthorization\./],
+    settings: { retention_days: 1826, raise_on_audit_write_error: true, filter_nested_metadata: true },
+    catalogue: -> { AuditCatalogue::ACTIONS },
+    sensitive_keys: %i[source_payload],
+    sensitive_key_patterns: [/secret/i],
+    present: %i[metadata_builder before_write current_scope_resolver]
+end
+```
+
+It checks the baseline is registered, that each value holds, and that it is
+restored after a mutation plus `reset_configuration!`. Behaviour held in
+lambdas can only be checked for presence; keep an app-specific example for
+anything whose *result* matters.
+
+**Replace your host code with** the shared example. It supersedes the bulk of
+each app's `spec/initializers/standard_audit_baseline_spec.rb` (or
+`spec/config/…`). The `Current.account` / `Current.session&.id` resolver
+examples can go too once those overrides are deleted (they are the 0.12.0
+defaults).
+
 ## Configuration Reference
 
 Use `configure(baseline: true)` in your initializer. It remembers the block so
@@ -382,7 +469,7 @@ StandardAudit.configure(baseline: true) do |config|
   # Run between the UUID assignment and the checksum computation, so a hook MAY
   # set a checksummed column and the row still passes `verify_chain`. No
   # `prepend: true` needed. Each hook is rescued individually and can never fail
-  # the audit write. Not run on the batched `insert_all!` path.
+  # the audit write. Also run on batched writes, at flush time (since 0.12.0).
   config.before_checksum { |log| log.scope = MyApp.derive_scope(log) }
   config.before_checksum :backfill_scope   # an AuditLog instance method
 
@@ -561,7 +648,7 @@ always win. It applies on every write path (direct `record`, `audit!`,
   which only ever covered the subscriber path — keep `scope_extractor` for
   reading the payload, move the `Current` fallback here;
 - a `before_checksum` hook that back-fills `log.scope` from `Current`
-  (sidekick-web), which never ran on the batched path.
+  (sidekick-web), which before 0.12.0 never ran on the batched path.
 
 ## Async Processing
 
@@ -600,6 +687,37 @@ GlobalID raises `ArgumentError`.
 ```ruby
 StandardAudit::AuditLog.anonymize_actor!("gid://myapp/User/123")
 ```
+
+#### Anonymization and the checksum chain
+
+Anonymizing rewrites checksummed columns, so an anonymized row can no longer
+reproduce its own digest. Since 0.12.0 its stored `checksum` is left untouched
+(the rows after it still link to it) and, when the table has an
+`anonymized_at` column, the row is stamped. `verify_chain` then counts it under
+`redacted` instead of reporting a `digest_mismatch`:
+
+```ruby
+StandardAudit::AuditLog.verify_chain
+# => { valid: true, verified: 5576, recovered: 0, redacted: 1, failures: [] }
+```
+
+A redacted row's declared parent is still checked, so deleting the row before
+it is still reported as `missing_parent`. Reconcile a nonzero `redacted`
+against your erasure records: anyone who can write `anonymized_at` can hide an
+edit behind it.
+
+Existing installs add the column with:
+
+```bash
+rails generate standard_audit:add_anonymized_at
+rails db:migrate
+```
+
+(nullable, no default, idempotent; safe under strong_migrations). Without it,
+`anonymize_actor!` works exactly as before and anonymized rows keep failing
+`verify_chain` as `digest_mismatch`. Rows anonymized before the migration are
+not stamped retroactively — they are indistinguishable from tampered rows after
+the fact; stamp them by hand if your erasure log identifies them.
 
 ### Right to Access (Export)
 
@@ -676,8 +794,11 @@ own digest, so editing it invalidates the row.
 
 ```ruby
 result = StandardAudit::AuditLog.verify_chain
-# => { valid: true, verified: 5577, recovered: 0, failures: [] }
+# => { valid: true, verified: 5577, recovered: 0, redacted: 0, failures: [] }
 ```
+
+`redacted` counts rows anonymized by `anonymize_actor!` — see "Anonymization
+and the checksum chain".
 
 - `failures` carries `reason: :digest_mismatch` (the row's fields no longer
   produce its digest) or `reason: :missing_parent` (the row it was appended to
@@ -729,6 +850,15 @@ verification — which is the point.
 **Do not run `backfill_checksums!` to make a red `verify_chain` go green.** It
 re-signs rows from their current contents, so it attests only that a script ran.
 It is for rows that never had a checksum at all (pre-feature data).
+
+## Generators
+
+| Generator | Purpose |
+|-----------|---------|
+| `standard_audit:install` | `audit_logs` migration + initializer (new installs) |
+| `standard_audit:add_previous_checksum` | Adds `previous_checksum` (upgrading from < 0.8) |
+| `standard_audit:add_anonymized_at` | Adds `anonymized_at` (upgrading from < 0.12) |
+| `standard_audit:add_checksums` | **Deprecated** (0.12.0; to be removed). The 0.2 → 0.3 upgrade path; warns when run |
 
 ## Rake Tasks
 

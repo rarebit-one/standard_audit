@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-09-24
+
+### Upgrade steps
+
+1. Bump the gem and run `rails generate standard_audit:add_anonymized_at && rails db:migrate` (new nullable `audit_logs.anonymized_at`; idempotent, no table rewrite, strong_migrations-safe). Optional — without it everything works as in 0.11, and anonymized rows keep failing `verify_chain`.
+2. StandardId apps: delete `config.current_actor_resolver = -> { Current.account }` and `config.current_session_id_resolver = -> { Current.session&.id }` — they are now the defaults.
+3. If your `metadata_builder` must NOT run on direct `StandardAudit.record` / `audit!` writes, make it idempotent or move that logic (see Changed).
+4. Optionally adopt `current_scope_resolver`, `before_write`, `raise: false` and `require "standard_audit/rspec"`'s `have_audited` / baseline shared example — each README section says which host code it replaces.
+
+### Added
+
+- **`config.before_write = ->(entry) { … }`** — runs on every write path (direct `record`, block form, `Auditable#record_audit`, `Operation#audit!`, both subscribers; sync, async and batched), after the Current resolvers and `metadata_builder` and before dereferencing/redaction. Mutate the entry in place; raising aborts the write (direct callers see the error; subscribers rescue and report it). Replaces host wrappers such as fundbright's `AuditWriting#record_audit!` and its `audit!` PII-guard/`surface` override.
+- **`config.current_scope_resolver`** (default `nil`) — fallback audit scope when a write names none. Explicit `scope:` and `scope_extractor` results always win. Applied on every write path.
+- **`StandardAudit.record(..., raise: false)`** — a failed write is logged, reported to `Rails.error` as handled, and returns nil. Replaces the `AuditAuthFailure` rescue-and-report wrappers.
+- **`audit_logs.anonymized_at`** and the `standard_audit:add_anonymized_at` generator; the install migration now includes the column. `AuditLog#anonymized?` and `AuditLog.anonymization_column?`.
+- **`verify_chain` result gains `redacted:`** — rows stamped `anonymized_at` are counted there instead of as `digest_mismatch` failures. Their stored checksum is kept, so the chain still links through them, and their declared parent is still checked for `missing_parent`. `rake standard_audit:verify` prints the count when nonzero.
+- **RSpec support:** `have_audited("event").by(actor).on(target).within(scope).with_metadata(...).once` block matcher, and the `"a standard_audit baseline"` shared example. Loaded by `require "standard_audit/rspec"`, or individually from `standard_audit/rspec/matchers` and `standard_audit/rspec/baseline`.
+
+### Changed
+
+- **One write path.** Every entry point now ends in `StandardAudit.write_entry`. `StandardAudit::Subscriber` no longer re-implements the write, which has three visible effects:
+  - **`metadata_builder` now runs on direct `StandardAudit.record` calls** (and therefore `audit!` / `record_audit`), not only on the subscriber paths. Builders that inject context (`engine_scope`) now reach direct writes, closing the gap fundbright-web's initializer documents. A builder that is not idempotent would now see operation metadata too — review before upgrading.
+  - **Events handled by the ActiveSupport::Notifications subscriber inside `StandardAudit.batch` are now buffered** and flushed with the batch, like the `Rails.event` subscriber and direct calls already were. `before_checksum` hooks run for them (see Fixed).
+  - Subscriber failures are logged as `[StandardAudit] Error creating audit log for <event>: …` and reported with the same context as 0.11.1.
+- **Default resolvers match StandardId.** `current_actor_resolver` tries `Current.account`, then `Current.user`; `current_session_id_resolver` tries `Current.session&.id`, then `Current.session_id`. Each is `respond_to?`-guarded, so `Current.user` apps are unaffected. The README's zero-config claim for StandardId is now true.
+- `Rails.event` reserved metadata (`_tags`, `_source`) is still merged after `metadata_builder`, so builders never see it.
+
+### Fixed
+
+- **`before_checksum` hooks now run on batched writes.** `StandardAudit.batch` flushes with `insert_all!`, which never built a model, so hooks silently skipped every batched row. The flush now runs each buffered row through the hooks (per-hook isolation included) before checksumming, so batched rows get the same derived columns as `save!` and still verify.
+
+### Deprecated
+
+- **`standard_audit:add_checksums` generator** — the 0.2 → 0.3 upgrade path. It still works but warns; removal is planned.
+
 ## [0.11.1] - 2026-09-24
 
 ### Fixed
