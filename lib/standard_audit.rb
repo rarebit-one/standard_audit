@@ -56,7 +56,15 @@ module StandardAudit
     # Block form instruments `event_type` via ActiveSupport::Notifications
     # around the block and lets the Subscriber write the row (which lands back
     # here), so it records only when the event is subscribed to.
+    #
+    # `raise: false` makes a failed write non-fatal: the error is logged and
+    # reported to `Rails.error` as handled, and nil is returned. For call
+    # sites where a missing audit row must never break the request (auth
+    # failure logging, say). It governs only the audit write — in block form
+    # the subscriber already rescues, and the block's own errors always
+    # propagate.
     def record(event_type, actor: nil, target: nil, scope: nil, metadata: {}, **options, &block)
+      raise_errors = options.key?(:raise) ? options.delete(:raise) : true
       return unless config.enabled
 
       if block
@@ -70,8 +78,15 @@ module StandardAudit
         return
       end
 
-      write_entry(event_type, actor: actor, target: target, scope: scope,
-        metadata: metadata, context: options)
+      begin
+        write_entry(event_type, actor: actor, target: target, scope: scope,
+          metadata: metadata, context: options)
+      rescue => e
+        raise if raise_errors
+
+        report_write_error(e, event_type, source: "StandardAudit.record")
+        nil
+      end
     end
 
     # @api private — the single write path shared by `record` and the two
