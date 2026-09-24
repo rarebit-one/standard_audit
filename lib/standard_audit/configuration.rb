@@ -4,7 +4,8 @@ module StandardAudit
                   :actor_extractor, :target_extractor, :scope_extractor,
                   :current_actor_resolver, :current_request_id_resolver,
                   :current_ip_address_resolver, :current_user_agent_resolver,
-                  :current_session_id_resolver,
+                  :current_session_id_resolver, :current_scope_resolver,
+                  :before_write,
                   :sensitive_keys, :sensitive_key_patterns,
                   :sensitive_key_exceptions, :filter_nested_metadata,
                   :dereference_record_metadata,
@@ -46,6 +47,27 @@ module StandardAudit
         session_id = session.id if session.respond_to?(:id)
         session_id || Configuration.current_attribute(:session_id)
       }
+
+      # Fallback for the audit scope (tenant) when a write names none —
+      # explicit `scope:` and `scope_extractor` results always win. Applied on
+      # every write path. nil (the default) leaves unscoped writes unscoped.
+      #
+      #   config.current_scope_resolver = -> { Current.organisation }
+      @current_scope_resolver = nil
+
+      # A callable run on EVERY write path (direct `record`, `audit!`,
+      # `record_audit`, both subscribers; sync, async and batched) after the
+      # Current resolvers and `metadata_builder`, and BEFORE redaction. It
+      # receives the mutable entry Hash — :event_type, :actor, :target, :scope,
+      # :metadata, :request_id, :ip_address, :user_agent, :session_id — and may
+      # change it in place; the return value is ignored. Raising aborts the
+      # write (the subscribers rescue and report; direct callers see the error).
+      #
+      #   config.before_write = ->(entry) {
+      #     AuditMetadataPii.verify!(entry[:metadata]) if Rails.env.local?
+      #     entry[:metadata] = entry[:metadata].merge("surface" => Current.surface) if Current.surface
+      #   }
+      @before_write = nil
 
       # Note: :authorization filters the HTTP Authorization header value.
       # If you use "authorization" as a metadata key for policy decisions,

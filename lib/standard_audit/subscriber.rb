@@ -27,90 +27,32 @@ module StandardAudit
 
     # The event handler rescues so a failed audit write cannot break the
     # instrumented code path, but a log line alone is invisible to error
-    # tracking — so report it as handled too.
-    def report_error(error, event_name)
-      return unless Rails.respond_to?(:error) && Rails.error
-
-      Rails.error.report(
-        error,
-        handled: true,
-        context: { StandardAudit.config.audit_error_context_key => event_name,
-                   subscriber: self.class.name }
-      )
-    rescue => report_failure
-      Rails.logger.error("[StandardAudit] Error reporting audit failure: #{report_failure.class}: #{report_failure.message}")
-    end
-
+    # tracking — so it is reported as handled too.
+    #
+    # The write itself goes through StandardAudit.write_entry, the same path
+    # `StandardAudit.record` uses, so batching, `current_scope_resolver`,
+    # `metadata_builder` and `before_write` behave identically here. Until
+    # 0.12.0 this method carried its own copy of the write logic, which ignored
+    # `StandardAudit.batch`.
     def handle_event(event)
-      return unless StandardAudit.config.enabled
-
       config = StandardAudit.config
+      return unless config.enabled
+
       payload = event.payload
 
-      actor = config.actor_extractor.call(payload)
-      target = config.target_extractor.call(payload)
-      scope = config.scope_extractor.call(payload)
-
-      # Fall back to Current attributes when payload values are nil
-      actor ||= config.current_actor_resolver.call
-
-      metadata = extract_metadata(payload, config)
-
-      attrs = {
-        event_type: event.name,
-        occurred_at: Time.current,
-        request_id: payload[:request_id] || config.current_request_id_resolver.call,
-        ip_address: payload[:ip_address] || config.current_ip_address_resolver.call,
-        user_agent: payload[:user_agent] || config.current_user_agent_resolver.call,
-        session_id: payload[:session_id] || config.current_session_id_resolver.call,
-        metadata: metadata
-      }
-
-      if config.async
-        job_attrs = attrs.dup
-        job_attrs[:actor_gid] = actor&.to_global_id&.to_s
-        job_attrs[:target_gid] = target&.to_global_id&.to_s
-        job_attrs[:scope_gid] = scope&.to_global_id&.to_s
-        job_attrs[:actor_type] = actor&.class&.name
-        job_attrs[:target_type] = target&.class&.name
-        job_attrs[:scope_type] = scope&.class&.name
-        StandardAudit::CreateAuditLogJob.perform_later(job_attrs.stringify_keys)
-      else
-        log = StandardAudit::AuditLog.new(attrs)
-        log.actor = actor
-        log.target = target
-        log.scope = scope
-        log.save!
-      end
+      StandardAudit.write_entry(
+        event.name,
+        actor: config.actor_extractor.call(payload),
+        target: config.target_extractor.call(payload),
+        scope: config.scope_extractor.call(payload),
+        metadata: payload.except(*EXCLUDED_PAYLOAD_KEYS),
+        context: payload.slice(:request_id, :ip_address, :user_agent, :session_id)
+      )
     rescue => e
-      Rails.logger.error("[StandardAudit] Error creating audit log: #{e.class}: #{e.message}")
-      report_error(e, event.name)
+      StandardAudit.report_write_error(e, event.name, subscriber: self.class.name)
     end
 
-    def extract_metadata(payload, config)
-      # Remove known non-metadata keys
-      excluded_keys = %i[actor target scope request_id ip_address user_agent session_id]
-      raw_metadata = payload.except(*excluded_keys)
-
-      if config.metadata_builder
-        raw_metadata = config.metadata_builder.call(raw_metadata)
-      end
-
-      # ActiveRecord objects in the payload are replaced by a reference BEFORE
-      # any key-based redaction, because the leak they cause is not a
-      # sensitive *key* — it is a value that serialises as an entire database
-      # row (rarebit-one/rarebit-ops#296). Runs after `metadata_builder` so a
-      # host that derives fields from a record (`payload[:account].email`)
-      # still sees the record.
-      if config.dereference_record_metadata
-        raw_metadata = StandardAudit::RecordReference.call(raw_metadata)
-      end
-
-      # Redaction lives in MetadataFilter, shared with StandardAudit.record.
-      # This path previously carried its own copy that did *not* subtract
-      # RESERVED_METADATA_KEYS, so `_tags`/`_source` were strippable here and
-      # not there.
-      StandardAudit::MetadataFilter.call(raw_metadata, config: config)
-    end
+    EXCLUDED_PAYLOAD_KEYS = %i[actor target scope request_id ip_address user_agent session_id].freeze
+    private_constant :EXCLUDED_PAYLOAD_KEYS
   end
 end

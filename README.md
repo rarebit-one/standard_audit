@@ -125,6 +125,47 @@ end
 
 This uses `ActiveSupport::Notifications.instrument` under the hood.
 
+### One write path, and `before_write`
+
+Every entry point — `StandardAudit.record` (plain and block form),
+`Auditable#record_audit`, `Operation#audit!`, the ActiveSupport::Notifications
+subscriber and the `Rails.event` subscriber — ends in the same write path.
+Actor/session/scope resolution, `metadata_builder`, `before_write`, record
+dereferencing, redaction, `StandardAudit.batch` and `async` therefore behave
+identically whichever way a row is written. (Before 0.12.0 the notifications
+subscriber carried its own copy: it ignored `batch`, and `metadata_builder`
+never ran on direct `record` calls.)
+
+`config.before_write` is the seam for host policy that must apply to every row:
+
+```ruby
+config.before_write = ->(entry) {
+  # entry: { event_type:, actor:, target:, scope:, metadata:,
+  #          request_id:, ip_address:, user_agent:, session_id: }
+  AuditMetadataPii.verify!(entry[:metadata]) if StandardAudit::Operation::Audit.verify?
+  if (surface = Current.audit_surface).present?
+    entry[:metadata] = entry[:metadata].merge(surface: surface)
+  end
+}
+```
+
+It runs after the `Current` resolvers and `metadata_builder`, and **before**
+dereferencing and `sensitive_keys` redaction, so anything it injects is still
+filtered. Mutate `entry` in place; the return value is ignored. Raising aborts
+the write: direct callers see the error, the subscribers rescue and report it.
+Unlike `before_checksum`, it also runs on batched writes.
+
+**Replace your host code with** a `before_write`. It supersedes:
+
+- a hand-built job-side wrapper that runs a guard before `StandardAudit.record`
+  (fundbright-web `AuditWriting#record_audit!`);
+- an `audit!` override that runs a PII guard and injects metadata
+  (fundbright-web `ApplicationOperation#audit!`);
+- a `metadata_builder` whose injection (`engine_scope`) is documented as
+  missing direct writes (fundbright-web / luminality-web initializers) —
+  `metadata_builder` now applies to direct writes too, so no change is needed
+  beyond deleting the caveat.
+
 ## Model Concerns
 
 ### Auditable
@@ -363,8 +404,17 @@ StandardAudit.configure(baseline: true) do |config|
   }
 
   # -- Metadata Builder --
-  # Optional proc to transform metadata before storage.
+  # Optional proc to transform metadata before storage. Runs on EVERY write
+  # path (since 0.12.0 — previously only the two subscribers).
   config.metadata_builder = ->(metadata) { metadata.slice(:relevant_key) }
+
+  # -- Ambient scope --
+  # Fallback tenant when a write names none. See "Multi-Tenancy".
+  config.current_scope_resolver = -> { Current.organisation }
+
+  # -- before_write --
+  # Runs on every write path, before redaction. See "One write path".
+  config.before_write = ->(entry) { entry[:metadata] = entry[:metadata].merge("surface" => Current.surface) }
 
   # -- Async Processing --
   # Offload audit log creation to ActiveJob.
@@ -490,6 +540,28 @@ StandardAudit::AuditLog.for_scope(current_organisation)
 ```
 
 The scope is stored as a GlobalID string, so it works with any model class.
+
+### Ambient scope: `current_scope_resolver`
+
+When most writes happen inside a tenant-scoped request, resolve the scope from
+`Current` instead of threading it through every call:
+
+```ruby
+config.current_scope_resolver = -> { Current.channel || Current.organisation }
+```
+
+It is a *fallback*: an explicit `scope:` and a scope found by `scope_extractor`
+always win. It applies on every write path (direct `record`, `audit!`,
+`record_audit`, both subscribers; sync, async and batched). Default `nil`.
+
+**Replace your host code with** the one line above. It supersedes:
+
+- a `scope_extractor` that falls back to `Current` (nutripod-web:
+  `->(payload) { payload[:scope] || Current.channel || Current.organisation }`),
+  which only ever covered the subscriber path — keep `scope_extractor` for
+  reading the payload, move the `Current` fallback here;
+- a `before_checksum` hook that back-fills `log.scope` from `Current`
+  (sidekick-web), which never ran on the batched path.
 
 ## Async Processing
 
@@ -760,10 +832,10 @@ key you want on an audit row, while the value serialises with
 happens to hold. Audit rows are append-only, so an unsafe default cannot be
 walked back.
 
-On the notifications path, records are dereferenced **after**
-`metadata_builder` runs, so a builder that needs real attributes still gets the
-record (`metadata_builder` has never applied to a direct `StandardAudit.record`
-call — pass the attributes you want in `metadata` there):
+Records are dereferenced **after** `metadata_builder` (and `before_write`)
+run, so a builder that needs real attributes still gets the record. Since
+0.12.0 this holds on every write path, including direct `StandardAudit.record`
+calls:
 
 ```ruby
 config.metadata_builder = ->(metadata) {
