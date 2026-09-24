@@ -47,6 +47,24 @@ RSpec.describe StandardAudit::Generators::AddAnonymizedAtGenerator do
     connection.column_exists?(:audit_logs, :anonymized_at)
   end
 
+  describe "migration numbering" do
+    it "stamps the current time when the host has no later migration" do
+      travel_to(Time.utc(2026, 9, 24, 12, 0, 0)) do
+        File.write(File.join(destination_root, "db/migrate/20260101000000_create_things.rb"), "")
+        expect(File.basename(migration_path)).to start_with("20260924120000_")
+      end
+    end
+
+    # Hosts date some migrations ahead of the clock. A plain Time.now stamp
+    # would sort before them, so the new migration would run out of order.
+    it "sorts after the host's latest migration when that one is future-dated" do
+      travel_to(Time.utc(2026, 9, 24, 12, 0, 0)) do
+        File.write(File.join(destination_root, "db/migrate/20261231235959_future_dated.rb"), "")
+        expect(File.basename(migration_path)).to start_with("20270101000000_")
+      end
+    end
+  end
+
   it "adds a nullable datetime column without an early return that would short-circuit rollback" do
     content = File.read(migration_path)
 

@@ -185,6 +185,55 @@ RSpec.describe "StandardAudit single write path" do
       )
     end
 
+    describe "entry[:via]" do
+      let(:vias) { {} }
+
+      before do
+        captured = vias
+        StandardAudit.config.before_write = ->(entry) { captured[entry[:event_type]] = entry[:via] }
+      end
+
+      it "is :direct for StandardAudit.record, Auditable#record_audit and Operation#audit!" do
+        StandardAudit.record("write_path.via_direct", actor: user)
+        user.record_audit("write_path.via_auditable", target: order)
+        Orders::CreateOperation.new(order).execute
+
+        expect(vias).to eq(
+          "write_path.via_direct" => :direct, "write_path.via_auditable" => :direct, "order.created" => :direct
+        )
+      end
+
+      it "is :notification for the ActiveSupport::Notifications subscriber, block form included" do
+        ActiveSupport::Notifications.instrument("write_path.via_notification", actor: user)
+        StandardAudit.record("write_path.via_block", actor: user) { :done }
+
+        expect(vias).to eq("write_path.via_notification" => :notification, "write_path.via_block" => :notification)
+      end
+
+      it "is :rails_event for the Rails.event subscriber", skip: !Rails.respond_to?(:event) do
+        with_private_event_subscriber { Rails.event.notify("write_path.via_rails_event", actor: user) }
+
+        expect(vias).to eq("write_path.via_rails_event" => :rails_event)
+      end
+
+      it "is not persisted" do
+        StandardAudit.record("write_path.via_persisted", actor: user)
+
+        log = StandardAudit::AuditLog.where(event_type: "write_path.via_persisted").sole
+        expect(log.metadata).not_to have_key("via")
+      end
+    end
+
+    it "runs after metadata_builder and sees its output" do
+      StandardAudit.config.metadata_builder = ->(metadata) { metadata.merge("email" => "a***@example.com") }
+      seen_metadata = nil
+      StandardAudit.config.before_write = ->(entry) { seen_metadata = entry[:metadata].dup }
+
+      StandardAudit.record("write_path.order", actor: user, metadata: { "email" => "alice@example.com" })
+
+      expect(seen_metadata).to include("email" => "a***@example.com")
+    end
+
     it "may rewrite the scope" do
       other = explicit_scope
       StandardAudit.config.before_write = ->(entry) { entry[:scope] = other }

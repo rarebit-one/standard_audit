@@ -17,6 +17,16 @@ module StandardAudit
   # `sensitive_keys` even if a user adds them there.
   RESERVED_METADATA_KEYS = %w[_tags _source].freeze
 
+  # Values of `entry[:via]` as `before_write` sees it:
+  #
+  # * `:direct` — `StandardAudit.record` without a block, and therefore
+  #   `Auditable#record_audit` and `Operation#audit!`.
+  # * `:notification` — the ActiveSupport::Notifications subscriber
+  #   (`subscribe_to` patterns, and `StandardAudit.record` WITH a block, which
+  #   instruments the event and lets this subscriber write it).
+  # * `:rails_event` — the `Rails.event` subscriber (Rails 8.1+).
+  VIA = %i[direct notification rails_event].freeze
+
   class << self
     # Applies configuration to the single mutable Configuration instance.
     #
@@ -58,7 +68,8 @@ module StandardAudit
     # here), so it records only when the event is subscribed to.
     #
     # `raise: false` makes a failed write non-fatal: the error is logged and
-    # reported to `Rails.error` as handled, and nil is returned. For call
+    # reported through `config.error_reporter` (default: `Rails.error`, as
+    # handled), and nil is returned. For call
     # sites where a missing audit row must never break the request (auth
     # failure logging, say). It governs only the audit write — in block form
     # the subscriber already rescues, and the block's own errors always
@@ -80,7 +91,7 @@ module StandardAudit
 
       begin
         write_entry(event_type, actor: actor, target: target, scope: scope,
-          metadata: metadata, context: options)
+          metadata: metadata, context: options, via: :direct)
       rescue => e
         raise if raise_errors
 
@@ -96,7 +107,11 @@ module StandardAudit
     # values; nil entries fall back to the Current resolvers. `reserved` is
     # merged into metadata AFTER `metadata_builder` (the Rails.event subscriber
     # uses it for `_tags` / `_source`, which a builder never saw before 0.12).
-    def write_entry(event_type, actor:, target:, scope:, metadata:, context: {}, reserved: {})
+    # `via` names the entry point (see VIA) and is handed to `before_write`
+    # as `entry[:via]`; it is not persisted.
+    def write_entry(event_type, actor:, target:, scope:, metadata:, context: {}, reserved: {}, via: :direct)
+      raise ArgumentError, "via must be one of #{VIA.inspect}; got #{via.inspect}" unless VIA.include?(via)
+
       actor ||= config.current_actor_resolver.call
       scope ||= config.current_scope_resolver&.call
 
@@ -113,14 +128,16 @@ module StandardAudit
         request_id: context[:request_id] || config.current_request_id_resolver.call,
         ip_address: context[:ip_address] || config.current_ip_address_resolver.call,
         user_agent: context[:user_agent] || config.current_user_agent_resolver.call,
-        session_id: context[:session_id] || config.current_session_id_resolver.call
+        session_id: context[:session_id] || config.current_session_id_resolver.call,
+        via: via
       }
 
-      # Runs on EVERY path, before redaction, so anything it injects into
-      # metadata is still subject to `sensitive_keys` and dereferencing. It may
-      # mutate `entry` in place; its return value is ignored. It may raise —
-      # that is how a host guard rejects a write — and the error propagates
-      # exactly as a failed save would.
+      # Runs on EVERY path, AFTER `metadata_builder` and before redaction, so
+      # it sees the builder's output and anything it injects into metadata is
+      # still subject to `sensitive_keys` and dereferencing. It may mutate
+      # `entry` in place; its return value is ignored. It may raise — that is
+      # how a host guard rejects a write — and the error propagates exactly as
+      # a failed save would. `entry[:via]` says which entry point wrote it.
       config.before_write&.call(entry)
 
       persist(entry)
@@ -147,20 +164,29 @@ module StandardAudit
       Thread.current[:standard_audit_batch] = previous
     end
 
-    # @api private — logs a failed audit write and reports it to Rails.error
-    # as handled. Used by the subscribers, which must never let an audit
-    # failure break the instrumented code path.
+    # @api private — logs a failed audit write and reports it through
+    # `report_error`. Used by the subscribers, which must never let an audit
+    # failure break the instrumented code path, and by `record(raise: false)`.
     def report_write_error(error, event_type, **context)
       Rails.logger.error("[StandardAudit] Error creating audit log for #{event_type}: #{error.class}: #{error.message}")
-      return unless Rails.respond_to?(:error) && Rails.error
+      report_error(error, { config.audit_error_context_key => event_type, **context })
+    end
 
-      Rails.error.report(
-        error,
-        handled: true,
-        context: { config.audit_error_context_key => event_type, **context }
-      )
+    # @api private — the one place the gem reports an error it swallows.
+    # Calls `config.error_reporter` when set, otherwise
+    # `Rails.error.report(error, handled: true, context:)`. A reporter that
+    # raises is logged and ignored.
+    def report_error(error, context)
+      if config.error_reporter
+        config.error_reporter.call(error, context)
+      elsif defined?(Rails) && Rails.respond_to?(:error) && Rails.error
+        Rails.error.report(error, handled: true, context: context)
+      end
+      nil
     rescue => report_failure
-      Rails.logger.error("[StandardAudit] Error reporting audit failure: #{report_failure.class}: #{report_failure.message}")
+      message = "[StandardAudit] Error reporting audit failure: #{report_failure.class}: #{report_failure.message}"
+      Rails.logger&.error(message) if defined?(Rails) && Rails.respond_to?(:logger)
+      nil
     end
 
     def subscriber

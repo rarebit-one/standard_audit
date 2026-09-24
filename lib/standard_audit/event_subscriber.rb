@@ -47,7 +47,8 @@ module StandardAudit
           ip_address: context[:ip_address] || payload[:ip_address],
           user_agent: context[:user_agent] || payload[:user_agent],
           session_id: context[:session_id] || payload[:session_id]
-        }
+        },
+        via: :rails_event
       )
     rescue => e
       StandardAudit.report_write_error(e, name, subscriber: self.class.name)

@@ -37,6 +37,45 @@ RSpec.describe StandardAudit, ".record(raise: false)" do
     expect(Rails.logger).to have_received(:error).with(/auth\.failed.*audit table on fire/)
   end
 
+  describe "config.error_reporter" do
+    it "receives the error and context instead of Rails.error" do
+      break_writes!
+      reported = []
+      StandardAudit.config.error_reporter = ->(error, context) { reported << [error, context] }
+      allow(Rails.error).to receive(:report)
+
+      expect(StandardAudit.record("auth.failed", actor: user, raise: false)).to be_nil
+
+      expect(reported.sole.first).to be_a(ActiveRecord::StatementInvalid)
+      expect(reported.sole.last).to eq(audit_action: "auth.failed", source: "StandardAudit.record")
+      expect(Rails.error).not_to have_received(:report)
+    end
+
+    it "never turns a swallowed failure into a raised one when the reporter itself raises" do
+      break_writes!
+      StandardAudit.config.error_reporter = ->(_error, _context) { raise "tracker down" }
+      allow(Rails.logger).to receive(:error)
+
+      expect(StandardAudit.record("auth.failed", actor: user, raise: false)).to be_nil
+      expect(Rails.logger).to have_received(:error).with(/Error reporting audit failure: RuntimeError: tracker down/)
+    end
+
+    it "is used by the subscriber, before_checksum and audit! report sites too" do
+      reported = []
+      StandardAudit.config.error_reporter = ->(error, context) { reported << [error.message, context] }
+      StandardAudit.config.before_checksum { |_log| raise "hook broke" }
+      StandardAudit::Operation::Audit.handle_write_error(StandardError.new("op broke"), action: "x.y", operation: Object.new)
+      StandardAudit.report_write_error(StandardError.new("sub broke"), "a.b", subscriber: "S")
+      StandardAudit.record("hooked.event", actor: user)
+
+      expect(reported).to contain_exactly(
+        ["op broke", { audit_action: "x.y", operation: "Object" }],
+        ["sub broke", { audit_action: "a.b", subscriber: "S" }],
+        ["hook broke", { audit_action: "hooked.event" }]
+      )
+    end
+  end
+
   it "uses the configured audit_error_context_key" do
     break_writes!
     StandardAudit.config.audit_error_context_key = :audit_event

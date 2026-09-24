@@ -13,7 +13,7 @@ module StandardAudit
                   :anonymizable_metadata_keys, :retention_days,
                   :audit_catalogue, :verify_audit_declarations,
                   :raise_on_audit_write_error, :audit_write_error_handler,
-                  :audit_error_context_key
+                  :audit_error_context_key, :error_reporter
 
     def initialize
       @subscriptions = []
@@ -190,6 +190,27 @@ module StandardAudit
       # written for that reason also silently opts out of every future
       # improvement to the built-in reporter. Default keeps existing behaviour.
       @audit_error_context_key = :audit_action
+
+      # Where the gem sends the errors it swallows: a failed subscriber write,
+      # a failed `record(raise: false)`, a raising `before_checksum` hook, and
+      # a failed `audit!` write under the default report-and-swallow policy.
+      # A callable taking `(error, context)`, where context is a Hash such as
+      # `{ audit_action: "orders.created", subscriber: "StandardAudit::Subscriber" }`
+      # (keyed by `audit_error_context_key`).
+      #
+      # nil (the default) means `Rails.error.report(error, handled: true,
+      # context: context)`. That reaches Sentry only when a `Rails.error`
+      # subscriber is registered (sentry-rails registers one); a host that
+      # never forwards `Rails.error` can point this straight at its tracker:
+      #
+      #   config.error_reporter = ->(error, context) { Sentry.capture_exception(error, extra: context) }
+      #
+      # It replaces the built-in `Rails.error` call; call `Rails.error.report`
+      # from it too if you want both. A reporter that raises is logged and
+      # ignored, so it can never turn a swallowed audit failure into a raised
+      # one. `audit_write_error_handler`, when set, still takes precedence for
+      # `audit!` write failures.
+      @error_reporter = nil
 
       # Retention defaults from ENV so it can be set per-environment without a
       # code change. Unset/blank/non-positive => nil (infinite retention, the

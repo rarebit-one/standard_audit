@@ -1,12 +1,11 @@
+require "rails/generators"
+require "generators/standard_audit/migration_number"
+
 module StandardAudit
   module Generators
     class AddPreviousChecksumGenerator < Rails::Generators::Base
-      include Rails::Generators::Migration
+      include StandardAudit::Generators::MigrationNumber
       source_root File.expand_path("templates", __dir__)
-
-      def self.next_migration_number(dirname)
-        Time.now.utc.strftime("%Y%m%d%H%M%S")
-      end
 
       def copy_migration
         migration_template "add_previous_checksum_to_audit_logs.rb.erb",

@@ -57,8 +57,9 @@ standard_audit/
 │   └── version.rb
 ├── lib/generators/standard_audit/
 │   ├── install/                      # `rails g standard_audit:install`
-│   └── add_checksums/                # Migration generator for checksum column
-├── config/routes.rb
+│   ├── add_previous_checksum/        # previous_checksum column (< 0.8 hosts)
+│   ├── add_anonymized_at/            # anonymized_at column (< 0.12 hosts)
+│   └── migration_number.rb           # sorts after the host's latest migration
 └── spec/
     ├── dummy/                        # Test Rails app (SQLite in-memory)
     ├── jobs/, models/, lib/, generators/
