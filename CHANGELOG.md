@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-09-24
+
+### Upgrade steps
+
+1. **If you installed the 0.12.0 `add_anonymized_at` migration, check your copy.** The 0.12.0 template put `return if column_exists?(:audit_logs, :anonymized_at)` inside `change`. That early return also runs on rollback, so `db:rollback` deleted the `schema_migrations` row and silently left the column in place. Replace the body with `add_column :audit_logs, :anonymized_at, :datetime, if_not_exists: true` (in `change`), or copy the new up/down template. Nothing to do if your copy already uses `if_not_exists:` (sidekick-web, jumpdrive-web) or if you never ran the generator.
+2. If an error-tracker search or alert matches `before_checksum` hook failures on the `audit_event` context key, see Fixed.
+
+### Fixed
+
+- **The `add_anonymized_at` migration is reversible.** The template now uses explicit `up` / `down` with `add_column ..., if_not_exists: true` and `remove_column ..., if_exists: true`. It is still idempotent, and rollback now removes the column. A new generator spec runs the generated migration up, down and up.
+- **`before_checksum` hook failures use `config.audit_error_context_key`.** The hook's `Rails.error.report` hard-coded `audit_event:` as its context key. Every other audit-error report site uses the configured key (default `:audit_action`). Apps that set `audit_error_context_key = :audit_event` see no change. Apps on the default now get `audit_action:` for hook failures too, matching every other audit error.
+
+### Documentation
+
+- `current_scope_resolver` is for scope derived from `Current`. Scope derived from the row (e.g. the target's organisation) belongs in a `before_checksum` or `before_write` hook. The README no longer describes sidekick-web's target-derived hook as a `Current` back-fill.
+- New note: `before_write` / `before_checksum` run once per row, batched writes included. Memoize per-actor lookups (e.g. in a `CurrentAttributes` cache) to avoid an N+1 on a batch flush.
+- `record(raise: false)` reports through `Rails.error`, so failures reach Sentry only if a `Rails.error` subscriber is registered (`sentry-rails` registers one).
+
 ## [0.12.0] - 2026-09-24
 
 ### Upgrade steps

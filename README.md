@@ -116,6 +116,12 @@ StandardAudit.record("auth.token_invalid",
 The default is `raise: true` (unchanged). In block form the option only
 governs the audit write; errors from your block always propagate.
 
+`raise: false` does not talk to Sentry (or any other tracker) itself. It calls
+`Rails.error.report`, so a swallowed failure reaches your error tracker only if
+something subscribes to `Rails.error`. `sentry-rails` registers that subscriber
+for you. With a hand-rolled Sentry setup, register one
+(`Rails.error.subscribe(...)`), or these failures show up only in the log.
+
 **Replace your host code with** `raise: false`. It supersedes the
 `AuditAuthFailure#record_auth_failure` rescue-and-report wrapper
 (sidekick-web, luminality-web, nutripod-web
@@ -178,6 +184,27 @@ It runs after the `Current` resolvers and `metadata_builder`, and **before**
 dereferencing and `sensitive_keys` redaction, so anything it injects is still
 filtered. Mutate `entry` in place; the return value is ignored. Raising aborts
 the write: direct callers see the error, the subscribers rescue and report it.
+
+**Hooks run once per row, batched writes included.** `before_write` and
+`before_checksum` run for every row inside `StandardAudit.batch` too (at flush
+time for `before_checksum`). A hook that looks something up per actor (a role,
+a membership, a tenant) therefore runs one query per row and turns a batch into
+an N+1. Memoize those lookups for the unit of work, for example in a
+`CurrentAttributes` cache that resets with the request or job:
+
+```ruby
+class Current < ActiveSupport::CurrentAttributes
+  attribute :audit_actor_roles
+
+  def self.audit_role_for(actor)
+    self.audit_actor_roles ||= {}
+    audit_actor_roles[actor.to_global_id.to_s] ||= actor.audit_role
+  end
+end
+
+# actor_role: a column your app added to audit_logs
+config.before_checksum { |log| log.actor_role = Current.audit_role_for(log.actor) if log.actor }
+```
 
 **Replace your host code with** a `before_write`. It supersedes:
 
@@ -641,14 +668,25 @@ It is a *fallback*: an explicit `scope:` and a scope found by `scope_extractor`
 always win. It applies on every write path (direct `record`, `audit!`,
 `record_audit`, both subscribers; sync, async and batched). Default `nil`.
 
-**Replace your host code with** the one line above. It supersedes:
+`current_scope_resolver` is for scope that comes from **ambient request
+state** (`Current`). It takes no arguments and never sees the row. Scope that
+derives from the **row itself**, such as the organisation that owns the
+target, belongs in a `before_checksum` hook (or `before_write`), which receives
+the record or entry:
 
-- a `scope_extractor` that falls back to `Current` (nutripod-web:
-  `->(payload) { payload[:scope] || Current.channel || Current.organisation }`),
-  which only ever covered the subscriber path — keep `scope_extractor` for
-  reading the payload, move the `Current` fallback here;
-- a `before_checksum` hook that back-fills `log.scope` from `Current`
-  (sidekick-web), which before 0.12.0 never ran on the batched path.
+```ruby
+config.before_checksum do |log|
+  log.scope ||= log.target.organisation if log.target.respond_to?(:organisation)
+end
+```
+
+**Replace your host code with** the one line above when your fallback reads
+`Current`. It supersedes a `scope_extractor` that falls back to `Current`
+(nutripod-web:
+`->(payload) { payload[:scope] || Current.channel || Current.organisation }`),
+which only ever covered the subscriber path. Keep `scope_extractor` for reading
+the payload and move the `Current` fallback here. Target-derived scope hooks
+stay as they are; since 0.12.0 they also run on the batched path.
 
 ## Async Processing
 
