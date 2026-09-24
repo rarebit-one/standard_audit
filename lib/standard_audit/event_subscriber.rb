@@ -33,41 +33,27 @@ module StandardAudit
       target = config.target_extractor.call(payload)
       scope  = config.scope_extractor.call(payload)
 
-      metadata = build_metadata(payload, event[:tags], event[:source_location], config)
+      reserved = RESERVED_PAYLOAD_KEYS.map(&:to_s)
 
-      StandardAudit.record(
+      StandardAudit.write_entry(
         name,
         actor: actor,
         target: target,
         scope: scope,
-        metadata: metadata,
-        request_id: context[:request_id] || payload[:request_id],
-        ip_address: context[:ip_address] || payload[:ip_address],
-        user_agent: context[:user_agent] || payload[:user_agent],
-        session_id: context[:session_id] || payload[:session_id]
+        metadata: payload.reject { |k, _| reserved.include?(k.to_s) },
+        reserved: reserved_metadata(event[:tags], event[:source_location]),
+        context: {
+          request_id: context[:request_id] || payload[:request_id],
+          ip_address: context[:ip_address] || payload[:ip_address],
+          user_agent: context[:user_agent] || payload[:user_agent],
+          session_id: context[:session_id] || payload[:session_id]
+        }
       )
     rescue => e
-      Rails.logger.error("[StandardAudit] Error handling Rails.event: #{e.class}: #{e.message}")
-      report_error(e, name)
+      StandardAudit.report_write_error(e, name, subscriber: self.class.name)
     end
 
     private
-
-    # The event handler rescues so a failed audit write cannot break the
-    # instrumented code path, but a log line alone is invisible to error
-    # tracking — so report it as handled too.
-    def report_error(error, event_name)
-      return unless Rails.respond_to?(:error) && Rails.error
-
-      Rails.error.report(
-        error,
-        handled: true,
-        context: { StandardAudit.config.audit_error_context_key => event_name,
-                   subscriber: self.class.name }
-      )
-    rescue => report_failure
-      Rails.logger.error("[StandardAudit] Error reporting audit failure: #{report_failure.class}: #{report_failure.message}")
-    end
 
     def matches_subscription?(name)
       StandardAudit.config.subscriptions.any? { |pattern| pattern_match?(pattern, name) }
@@ -99,20 +85,18 @@ module StandardAudit
     end
 
     # `_tags` and `_source` are reserved metadata keys owned by this
-    # subscriber. Sensitive-key filtering is handled downstream by
-    # `StandardAudit.record`, so we don't re-run it here.
-    def build_metadata(payload, tags, source_location, config)
-      reserved = RESERVED_PAYLOAD_KEYS.map(&:to_s)
-      raw = payload.reject { |k, _| reserved.include?(k.to_s) }
-      raw = config.metadata_builder.call(raw) if config.metadata_builder
+    # subscriber. They are merged in AFTER `metadata_builder` runs (see
+    # StandardAudit.write_entry), so a builder never sees or strips them.
+    def reserved_metadata(tags, source_location)
+      reserved = {}
 
       if tags.is_a?(Hash) && tags.any?
-        raw[:_tags] = tags
+        reserved[:_tags] = tags
       elsif tags && !tags.is_a?(Hash)
         Rails.logger.warn("[StandardAudit] Dropping Rails.event tags of unexpected type: #{tags.class}")
       end
-      raw[:_source] = source_location if source_location
-      raw
+      reserved[:_source] = source_location if source_location
+      reserved
     end
   end
 end

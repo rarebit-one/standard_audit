@@ -1,5 +1,12 @@
 require "standard_audit"
+require "standard_audit/rspec/matchers"
+require "standard_audit/rspec/baseline"
 
+# StandardAudit test support. Loads the `have_audited` matcher
+# (standard_audit/rspec/matchers) and the "a standard_audit baseline" shared
+# example (standard_audit/rspec/baseline), and resets StandardAudit state
+# between examples.
+#
 # StandardAudit state reset between examples.
 #
 # - Clears the thread-local batch buffer so a spec that exits inside a

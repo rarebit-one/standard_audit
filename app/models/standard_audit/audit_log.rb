@@ -95,12 +95,21 @@ module StandardAudit
     # `subject` may be a record, a GlobalID, or a GlobalID string
     # ("gid://app/User/1"). A string is parsed, never located, so erasure and
     # export still work after the subject's own row has been deleted.
+    #
+    # Anonymization rewrites CHECKSUM_FIELDS, so an anonymized row can no
+    # longer reproduce its own digest. Its stored `checksum` is deliberately
+    # left untouched, so the rows after it still link to it. When the host has
+    # the `anonymized_at` column (`standard_audit:add_anonymized_at`), the row
+    # is stamped and `verify_chain` counts it as `redacted` rather than as a
+    # `digest_mismatch` failure. Without the column, anonymization works
+    # exactly as before and such rows still fail verification.
     def self.anonymize_actor!(subject)
       gid = subject_gid_for(subject)
       logs = where("actor_gid = ? OR target_gid = ?", gid, gid)
       count = logs.count
 
       anonymizable_keys = StandardAudit.config.anonymizable_metadata_keys.map(&:to_s)
+      stamp = anonymization_column? ? Time.current : nil
 
       logs.find_each do |log|
         attrs = {
@@ -119,10 +128,24 @@ module StandardAudit
           attrs[:metadata] = cleaned_metadata
         end
 
+        attrs[:anonymized_at] = log.anonymized_at || stamp if stamp
+
         log.update_columns(attrs)
       end
 
       count
+    end
+
+    # True when the table carries `anonymized_at` (the
+    # `standard_audit:add_anonymized_at` migration, or a 0.12+ install).
+    def self.anonymization_column?
+      column_names.include?("anonymized_at")
+    end
+
+    # True when this row's checksummed fields were rewritten by
+    # `anonymize_actor!`, so its digest is unverifiable by construction.
+    def anonymized?
+      has_attribute?(:anonymized_at) && anonymized_at.present?
     end
 
     def self.export_for_actor(subject)
@@ -190,6 +213,20 @@ module StandardAudit
       OpenSSL::Digest::SHA256.hexdigest(canonical)
     end
 
+    # Runs the configured `before_checksum` hooks against a row that will be
+    # written by `insert_all!` (the `StandardAudit.batch` flush), so batched
+    # writes get the same derived columns as a `save!`. The row is loaded into
+    # an unsaved instance, the hooks run exactly as on `before_create`, and the
+    # resulting attributes are returned for checksumming. With no hooks
+    # registered the row is returned untouched and no model is built.
+    def self.apply_before_checksum_hooks(row)
+      return row if StandardAudit.config.before_checksum_hooks.blank?
+
+      log = new(row)
+      log.send(:run_before_checksum_hooks)
+      log.attributes.symbolize_keys.except(:checksum, :previous_checksum)
+    end
+
     # The checksum of the most recent row — the node a new row links to.
     def self.chain_tip_checksum
       order(created_at: :desc, id: :desc).limit(1).pick(:checksum)
@@ -204,9 +241,18 @@ module StandardAudit
     end
 
     # Verifies the integrity of the audit log. Returns a result hash with
-    # :valid (boolean), :verified (count), :recovered (count) and :failures
-    # (array of hashes carrying :id, :event_type, :created_at, :expected,
-    # :actual and :reason).
+    # :valid (boolean), :verified (count), :recovered (count), :redacted
+    # (count) and :failures (array of hashes carrying :id, :event_type,
+    # :created_at, :expected, :actual and :reason).
+    #
+    # A row stamped `anonymized_at` (GDPR erasure via `anonymize_actor!`) is
+    # counted in :redacted instead of being digest-checked: its checksummed
+    # fields were rewritten on purpose, so its digest cannot reproduce. Its
+    # stored checksum is unchanged, so the rest of the chain still links
+    # through it, and a declared parent is still checked for presence. Treat a
+    # nonzero :redacted as something to reconcile against your erasure
+    # records — anyone able to write `anonymized_at` can also hide an edit
+    # behind it.
     #
     # Records are processed in (created_at, id) order. Records without a
     # checksum (pre-feature data) reset the walk — the next checksummed record
@@ -253,6 +299,7 @@ module StandardAudit
       previous_checksum = nil
       verified = 0
       recovered = 0
+      redacted = 0
       failures = []
       window = []
       first_row = true
@@ -265,10 +312,20 @@ module StandardAudit
           next
         end
 
-        verified += 1
         declared = record.previous_checksum if declared_parents
 
-        if declared.present?
+        if record.anonymized?
+          redacted += 1
+          # The digest cannot be checked, but the parent it declares can.
+          if declared.present? && check_parents && !parent_present?(declared, window, relation)
+            if first_row
+              pruned_parents << declared
+            elsif !pruned_parents.include?(declared)
+              failures << chain_failure(record, expected: nil, reason: :missing_parent)
+            end
+          end
+        elsif declared.present?
+          verified += 1
           expected = record.compute_checksum_value(previous_checksum: declared)
 
           if record.checksum != expected
@@ -286,6 +343,7 @@ module StandardAudit
             end
           end
         else
+          verified += 1
           expected = record.compute_checksum_value(previous_checksum: previous_checksum)
 
           if record.checksum == expected
@@ -303,7 +361,7 @@ module StandardAudit
         window.shift if window.size > recovery_window
       end
 
-      { valid: failures.empty?, verified: verified, recovered: recovered, failures: failures }
+      { valid: failures.empty?, verified: verified, recovered: recovered, redacted: redacted, failures: failures }
     end
 
     # Records, for every row that does not already carry one, the parent digest

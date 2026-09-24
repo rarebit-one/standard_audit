@@ -1,0 +1,15 @@
+class AddAnonymizedAtToAuditLogs < ActiveRecord::Migration[<%= ActiveRecord::Migration.current_version %>]
+  def change
+    # A nullable column with no default: a metadata-only change on PostgreSQL,
+    # no table rewrite, nothing for StrongMigrations to object to. Idempotent,
+    # so it is safe on a host that already has the column (a 0.12+ install).
+    #
+    # Rows anonymized BEFORE this migration keep a NULL stamp and still fail
+    # `verify_chain` as `digest_mismatch`; there is no way to tell them apart
+    # from tampered rows after the fact. If your erasure records identify them,
+    # stamp them by hand (`update_columns(anonymized_at: ...)`).
+    return if column_exists?(:audit_logs, :anonymized_at)
+
+    add_column :audit_logs, :anonymized_at, :datetime
+  end
+end
