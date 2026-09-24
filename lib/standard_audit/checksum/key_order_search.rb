@@ -1,8 +1,8 @@
 module StandardAudit
   module Checksum
-    # Reconstructs the key order a version-1 row was signed with.
+    # Reconstructs the key order a legacy row was signed with.
     #
-    # A version-1 digest covers `metadata.to_json` in the writer's Ruby
+    # A legacy digest covers `metadata.to_json` in the writer's Ruby
     # insertion order. A `jsonb` column has since discarded that order, and it
     # cannot be derived from the stored row: the storage order is a function
     # of the key set alone, so every insertion order maps to the same stored
@@ -33,7 +33,7 @@ module StandardAudit
       end
 
       # Searches the orderings of every Hash-valued field in `attrs` for one
-      # that reproduces `checksum` under version 1 with one of `parents`.
+      # that reproduces `checksum` under the legacy digest with one of `parents`.
       # Returns `{ parent:, attrs: }` on a match, nil otherwise.
       def search(attrs, fields:, checksum:, parents:)
         hashed = fields.select { |f| attrs[f].is_a?(Hash) }

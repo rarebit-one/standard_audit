@@ -85,14 +85,12 @@ namespace :standard_audit do
 
   desc "Verify audit log chain integrity (tamper detection)"
   task verify: :environment do
-    # ACCEPT_LEGACY_UNVERIFIABLE_BEFORE=2026-09-25T00:00:00Z — a policy
-    # decision, see AuditLog.verify_chain: legacy rows created before it whose
-    # key order cannot be reconstructed are counted, not failed.
-    # KEY_ORDER_SEARCH_LIMIT=5040 — orderings tried per legacy row.
+    # FAIL_ON_LEGACY_UNVERIFIABLE=1 — treat pre-cutover rows whose metadata
+    # key order cannot be reconstructed as failures (see
+    # AuditLog.verify_chain). KEY_ORDER_SEARCH_LIMIT=5040 — orderings tried
+    # per legacy row.
     options = {}
-    if (cutover = ENV["ACCEPT_LEGACY_UNVERIFIABLE_BEFORE"].presence)
-      options[:accept_legacy_unverifiable_before] = Time.iso8601(cutover)
-    end
+    options[:fail_on_legacy_unverifiable] = true if %w[1 true].include?(ENV["FAIL_ON_LEGACY_UNVERIFIABLE"])
     if (limit = ENV["KEY_ORDER_SEARCH_LIMIT"].presence)
       options[:key_order_search_limit] = Integer(limit, 10)
     end
@@ -101,14 +99,15 @@ namespace :standard_audit do
 
     puts "Audit Log Chain Verification"
     puts "============================="
+    puts "Canonical checksums since: #{StandardAudit.config.canonical_checksum_since.utc.iso8601}"
     puts "Records verified: #{result[:verified]}"
     puts "Chain valid: #{result[:valid]}"
     puts "Forked links recovered: #{result[:recovered]}"
     puts "Legacy rows verified by key-order reconstruction: #{result[:reordered]}" if result[:reordered].to_i.positive?
     puts "Anonymized (redacted) records: #{result[:redacted]}" if result[:redacted].to_i.positive?
     if result[:legacy_unverifiable].to_i.positive?
-      accepted = options.key?(:accept_legacy_unverifiable_before) ? " (accepted before #{options[:accept_legacy_unverifiable_before].iso8601}: not failures)" : ""
-      puts "Legacy rows unverifiable (metadata key order lost): #{result[:legacy_unverifiable]}#{accepted}"
+      puts "Legacy rows unverifiable (metadata key order lost): #{result[:legacy_unverifiable]} " \
+           "— cannot be proven either way; this count must not grow after the cutover"
     end
 
     if result[:failures].any?

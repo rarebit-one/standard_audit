@@ -21,9 +21,6 @@ class CreateAuditLogs < ActiveRecord::Migration[<%= ActiveRecord::Migration.curr
       # share a parent, so the log is a DAG rather than a strict line; storing
       # the parent is what keeps every row verifiable when it forks.
       t.string :previous_checksum, limit: 64
-      # Which digest algorithm signed the row: 2 (canonical — independent of
-      # how jsonb orders keys). NULL only on rows written before 0.14.0.
-      t.integer :checksum_version, limit: 2
       # Set by AuditLog.anonymize_actor! (GDPR erasure). verify_chain counts a
       # stamped row as `redacted` instead of a digest failure.
       t.datetime :anonymized_at

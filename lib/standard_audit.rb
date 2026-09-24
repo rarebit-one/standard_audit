@@ -1,4 +1,14 @@
 require "standard_audit/version"
+
+module StandardAudit
+  # From this instant (by each row's `created_at`) new rows get the canonical
+  # checksum and are verified strictly with it; earlier rows are legacy. See
+  # StandardAudit::Checksum and fundbright/delivery-ops#689. Every host must
+  # run 0.13.1+ BEFORE this time: an older gem still writing after it produces
+  # legacy-hashed rows that fail strict canonical verification.
+  # Overridable per host via `config.canonical_checksum_since`.
+  CANONICAL_CHECKSUM_CUTOVER = Time.utc(2026, 10, 1, 0, 0, 0).freeze
+end
 require "standard_audit/engine"
 require "standard_audit/configuration"
 require "standard_audit/checksum"
@@ -272,7 +282,6 @@ module StandardAudit
     def flush_batch(buffer)
       now = Time.current
       records_parent = StandardAudit::AuditLog.chain_parent_column?
-      records_version = StandardAudit::AuditLog.checksum_version_column?
       previous_checksum = StandardAudit::AuditLog.chain_tip_checksum
 
       # Generate sorted UUIDs to ensure batch ordering matches id ordering.
@@ -288,12 +297,13 @@ module StandardAudit
           created_at: now,
           updated_at: now
         ))
+        # created_at is set above, so the algorithm is decided by the same
+        # stored timestamp verification will read.
         checksum = StandardAudit::AuditLog.compute_checksum_value(
           row.stringify_keys,
           previous_checksum: previous_checksum
         )
         row[:previous_checksum] = previous_checksum if records_parent
-        row[:checksum_version] = StandardAudit::Checksum::CURRENT_VERSION if records_version
         row[:checksum] = checksum
         previous_checksum = checksum
         row

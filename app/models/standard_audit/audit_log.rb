@@ -193,17 +193,22 @@ module StandardAudit
 
     # Recomputes the checksum from the record's current field values and the
     # given previous checksum. Useful for verification without saving.
-    # `version:` selects the digest algorithm (see StandardAudit::Checksum);
-    # it defaults to the one new rows are written with.
-    def compute_checksum_value(previous_checksum: nil, version: StandardAudit::Checksum::CURRENT_VERSION)
+    # The algorithm (StandardAudit::Checksum::LEGACY or CANONICAL) follows the
+    # row's `created_at` against `config.canonical_checksum_since`; pass
+    # `version:` to force one.
+    def compute_checksum_value(previous_checksum: nil, version: nil)
       self.class.compute_checksum_value(
         attributes.slice(*CHECKSUM_FIELDS),
         previous_checksum: previous_checksum,
-        version: version
+        version: version || StandardAudit::Checksum.algorithm_for(created_at)
       )
     end
 
-    def self.compute_checksum_value(attrs, previous_checksum: nil, version: StandardAudit::Checksum::CURRENT_VERSION)
+    # `attrs` may carry "created_at" / :created_at, which picks the algorithm
+    # as for a stored row; without it, the algorithm a write now would use.
+    def self.compute_checksum_value(attrs, previous_checksum: nil, version: nil)
+      version ||= StandardAudit::Checksum.algorithm_for(attrs["created_at"] || attrs[:created_at])
+
       StandardAudit::Checksum.digest(
         attrs,
         fields: CHECKSUM_FIELDS,
@@ -223,7 +228,7 @@ module StandardAudit
 
       log = new(row)
       log.send(:run_before_checksum_hooks)
-      log.attributes.symbolize_keys.except(:checksum, :previous_checksum, :checksum_version)
+      log.attributes.symbolize_keys.except(:checksum, :previous_checksum)
     end
 
     # The checksum of the most recent row — the node a new row links to.
@@ -239,65 +244,65 @@ module StandardAudit
       column_names.include?("previous_checksum")
     end
 
-    # True when the table carries `checksum_version` (the
-    # `standard_audit:add_checksum_version` migration, or a 0.14+ install).
-    # Without it, new rows are still written with the canonical (v2) digest
-    # but nothing records that, so verification has to try both algorithms
-    # on every row and cannot tell a tampered v2 row from a legacy one.
-    def self.checksum_version_column?
-      column_names.include?("checksum_version")
-    end
-
     # Verifies the integrity of the audit log. Returns a result hash:
     #
-    #   valid:               true only when :failures is empty (see below)
+    #   valid:               true when :failures is empty (see "Legacy rows")
     #   verified:            rows whose digest was checked (every checksummed,
     #                        non-anonymized row)
     #   recovered:           rows verified against a searched-for parent
     #   reordered:           legacy rows verified by reconstructing the
     #                        metadata key order they were signed with
     #   redacted:            anonymized rows (not digest-checked)
-    #   legacy_unverifiable: legacy rows whose digest can't be reproduced
+    #   legacy_unverifiable: count of :unverifiable
+    #   unverifiable:        legacy rows whose digest can't be reproduced
     #                        because the key order they were signed with is
-    #                        lost (reason :legacy_key_order_unverifiable)
+    #                        lost — same shape as a failure, reason
+    #                        :legacy_key_order_unverifiable
     #   failures:            hashes with :id, :event_type, :created_at,
     #                        :expected, :actual and :reason
     #
-    # == Checksum versions
+    # == Checksum algorithms and the cutover
     #
-    # Rows written by 0.14+ use the canonical (v2) digest, which does not
-    # depend on how the database orders JSON object keys; rows written before
-    # it use the legacy (v1) digest, which does — see StandardAudit::Checksum
-    # and fundbright/delivery-ops#689. With the `checksum_version` column
-    # (`standard_audit:add_checksum_version`) a v2 row is marked 2 and checked
-    # ONLY as v2. An unmarked row (NULL, or no column) is checked as v1 and
-    # then as v2.
+    # A row created at or after `config.canonical_checksum_since` (default
+    # StandardAudit::CANONICAL_CHECKSUM_CUTOVER) is signed with the canonical
+    # digest, which does not depend on how the database orders JSON object
+    # keys, and is verified STRICTLY with it: a mismatch is :digest_mismatch,
+    # never a legacy classification. An earlier row is legacy: its digest
+    # hashed `metadata.to_json` in Ruby insertion order, which `jsonb`
+    # discards (fundbright/delivery-ops#689). See StandardAudit::Checksum.
+    # The decision is recomputed from each row's stored `created_at`, the
+    # same value the writer used.
     #
-    # An unmarked row that neither reproduces is, in this order:
+    # == Legacy rows
     #
-    #   1. searched for the metadata key order it was signed with (v1 hashed
-    #      `metadata.to_json` in Ruby insertion order, which `jsonb` discards).
-    #      A key order that reproduces the stored digest is a witness, like
-    #      the parent search; the row counts in :reordered and is valid. The
-    #      search is bounded by `key_order_search_limit` orderings per row
-    #      (Checksum::KeyOrderSearch);
-    #   2. reported `:digest_mismatch` when the search was EXHAUSTIVE and the
-    #      row declares its parent: no key order explains it, so its content
-    #      does not match what was signed;
+    # A legacy row is checked with the legacy digest, exactly as before —
+    # declared parent, else the preceding row, else the recovery search
+    # below. One that still does not reproduce is, in this order:
+    #
+    #   1. searched for the metadata key order it was signed with. A key order
+    #      that reproduces the stored digest is a witness, like the parent
+    #      search; the row counts in :reordered and is valid. Bounded by
+    #      `key_order_search_limit` orderings per row
+    #      (Checksum::KeyOrderSearch), against the declared parent or else the
+    #      preceding row and "no parent";
+    #   2. reported `:digest_mismatch` when that search was EXHAUSTIVE against
+    #      the parent the row declares (no key order explains it), or when the
+    #      row has no JSON object with more than one key (key order cannot be
+    #      why it fails);
     #   3. reported `:missing_parent` when its declared parent is absent;
-    #   4. otherwise reported `:legacy_key_order_unverifiable` — only when some
-    #      JSON object in the row has more than one key. A row without one
-    #      cannot fail because of key order and stays `:digest_mismatch`.
+    #   4. otherwise listed in :unverifiable with reason
+    #      `:legacy_key_order_unverifiable`.
     #
-    # `:legacy_key_order_unverifiable` means "cannot be proven either way", NOT
-    # "untampered": a legacy row whose metadata was edited looks exactly like
-    # one whose key order was lost. So by default these rows are failures and
-    # `valid` is false while any exist. Accepting them is a policy decision for
-    # the host: pass `accept_legacy_unverifiable_before:` (a Time — typically
-    # when 0.14 was deployed) and rows created before it are left out of
-    # :failures and only counted in :legacy_unverifiable. A row created at or
-    # after that time is always a failure, which also stops a post-upgrade row
-    # from being passed off as legacy by clearing its `checksum_version`.
+    # `:legacy_key_order_unverifiable` means "cannot be proven either way":
+    # an edited legacy row looks exactly like one whose key order was lost.
+    # Such rows do NOT make `valid` false on their own — the gem cannot tell,
+    # and the policy for them belongs to the host — but they are never
+    # silent: they are counted in :legacy_unverifiable and listed in
+    # :unverifiable. Pass `fail_on_legacy_unverifiable: true` to report them
+    # as failures instead. After the cutover no new legacy row can be
+    # written, so under honest operation :legacy_unverifiable never grows;
+    # alert if it does (an edited pre-cutover row, or a `created_at` moved
+    # back across the cutover).
     #
     # A row stamped `anonymized_at` (GDPR erasure via `anonymize_actor!`) is
     # counted in :redacted instead of being digest-checked: its checksummed
@@ -328,12 +333,11 @@ module StandardAudit
     #     of a forked row without re-signing anything. It does not weaken tamper
     #     detection: a row whose fields were altered reproduces no candidate's
     #     digest, so it still fails. (The key-order search is not combined with
-    #     this window search — it tries the preceding row and "no parent" only —
-    #     so a legacy row that was both forked and reordered stays
-    #     unverifiable.)
+    #     this window search, so a legacy row that was both forked and
+    #     reordered stays unverifiable.)
     #
-    # The chain links across the v1 → v2 boundary like anywhere else: the
-    # first v2 row's parent is the last v1 row's stored checksum.
+    # The chain links across the cutover like anywhere else: the first
+    # canonical row's parent is the last legacy row's stored checksum.
     #
     # A row whose parent digest is absent from the log is reported with
     # `reason: :missing_parent` — a row was removed. Two exemptions:
@@ -351,16 +355,12 @@ module StandardAudit
     # `created_at`. Rows whose two timestamps disagree (a backdated
     # `occurred_at`) can leave a hole rather than a prefix, and a hole is
     # reported — truthfully, since rows really are missing.
-    #
-    # A row marked with a `checksum_version` this gem does not know is reported
-    # `:unsupported_checksum_version` (written by a newer gem, or edited).
     def self.verify_chain(scope: nil, batch_size: 1000, recovery_window: 256, strict: false,
       key_order_search_limit: StandardAudit::Checksum::KeyOrderSearch::DEFAULT_LIMIT,
-      accept_legacy_unverifiable_before: nil)
+      fail_on_legacy_unverifiable: false)
       relation = scope ? where(scope_gid: scope.to_global_id.to_s) : all
       check_parents = scope.nil?
       declared_parents = chain_parent_column?
-      versioned = checksum_version_column?
       key_orders = StandardAudit::Checksum::KeyOrderSearch.new(limit: key_order_search_limit)
 
       previous_checksum = nil
@@ -368,7 +368,7 @@ module StandardAudit
       recovered = 0
       reordered = 0
       redacted = 0
-      legacy_unverifiable = 0
+      unverifiable = []
       failures = []
       window = []
       first_row = true
@@ -403,28 +403,24 @@ module StandardAudit
         end
 
         declared = record.previous_checksum if declared_parents
-        version = record.checksum_version if versioned
 
         if record.anonymized?
           redacted += 1
           # The digest cannot be checked, but the parent it declares can.
           report_missing_parent.call(record, declared, nil)
-        elsif version && !StandardAudit::Checksum::VERSIONS.include?(version)
-          verified += 1
-          failures << chain_failure(record, expected: nil, reason: :unsupported_checksum_version)
         else
           verified += 1
-          versions = version ? [version] : StandardAudit::Checksum::VERSIONS
+          algorithm = StandardAudit::Checksum.algorithm_for(record.created_at)
           parent = declared.presence || previous_checksum
-          expected = walk_digester(record, version || StandardAudit::Checksum::LEGACY).call(parent)
+          expected = walk_digester(record, algorithm).call(parent)
 
-          if digest_matches?(record, parent, versions)
+          if record.checksum == expected
             # Links to its declared parent, or to the row before it as a
             # linear chain does.
             report_missing_parent.call(record, declared, expected)
-          elsif declared.blank? && !strict && recover_parent(record, window, versions)
+          elsif declared.blank? && !strict && recover_parent(record, window, algorithm)
             recovered += 1
-          elsif version.nil? && legacy_key_order_ambiguous?(record)
+          elsif algorithm == StandardAudit::Checksum::LEGACY && legacy_key_order_ambiguous?(record)
             attrs = record.attributes.slice(*CHECKSUM_FIELDS)
             parents = declared.present? || strict ? [parent] : [parent, nil].uniq
 
@@ -438,10 +434,9 @@ module StandardAudit
             elsif report_missing_parent.call(record, declared, expected)
               # Reported as a removed row, which is the stronger finding.
             else
-              legacy_unverifiable += 1
-              unless accept_legacy_unverifiable_before && record.created_at < accept_legacy_unverifiable_before
-                failures << chain_failure(record, expected: expected, reason: :legacy_key_order_unverifiable)
-              end
+              entry = chain_failure(record, expected: expected, reason: :legacy_key_order_unverifiable)
+              unverifiable << entry
+              failures << entry if fail_on_legacy_unverifiable
             end
           else
             failures << chain_failure(record, expected: expected, reason: :digest_mismatch)
@@ -460,7 +455,8 @@ module StandardAudit
         recovered: recovered,
         reordered: reordered,
         redacted: redacted,
-        legacy_unverifiable: legacy_unverifiable,
+        legacy_unverifiable: unverifiable.size,
+        unverifiable: unverifiable,
         failures: failures
       }
     end
@@ -527,57 +523,46 @@ module StandardAudit
     private_class_method :chain_failure
 
     # Searches `window` (most recent first, then "no parent at all") for the
-    # digest that reproduces the record's stored checksum under any of
-    # `versions`. Returns a one-element array holding the parent — which may
+    # digest that reproduces the record's stored checksum under `algorithm`.
+    # Returns a one-element array holding the parent — which may
     # itself be nil, for a row written against an empty table — or nil when
     # nothing reproduces the digest.
     #
     # SHA-256 preimage resistance is what makes this safe: a row whose fields
     # were altered reproduces no candidate's digest, so it is still reported.
-    def self.recover_parent(record, window, versions)
+    def self.recover_parent(record, window, algorithm)
       window.reverse_each do |candidate|
-        return [candidate] if digest_matches?(record, candidate, versions)
+        return [candidate] if digest_matches?(record, candidate, algorithm)
       end
 
-      [nil] if digest_matches?(record, nil, versions)
+      [nil] if digest_matches?(record, nil, algorithm)
     end
     private_class_method :recover_parent
 
     def self.resolve_parent(record, previous_checksum, window)
-      versions = checksum_versions_for(record)
-      return [previous_checksum] if digest_matches?(record, previous_checksum, versions)
+      algorithm = StandardAudit::Checksum.algorithm_for(record.created_at)
+      return [previous_checksum] if digest_matches?(record, previous_checksum, algorithm)
 
-      recover_parent(record, window, versions)
+      recover_parent(record, window, algorithm)
     end
     private_class_method :resolve_parent
 
-    def self.digest_matches?(record, parent, versions)
-      versions.any? { |v| record.checksum == walk_digester(record, v).call(parent) }
+    def self.digest_matches?(record, parent, algorithm)
+      record.checksum == walk_digester(record, algorithm).call(parent)
     end
     private_class_method :digest_matches?
 
-    # The row's `parent -> digest` function for `version`, memoised on the
+    # The row's `parent -> digest` function for `algorithm`, memoised on the
     # loaded record: the parent searches try hundreds of parents per row, and
     # this makes each try one SHA-256 instead of re-serialising the row. Only
     # for records the walk loaded and never mutates.
-    def self.walk_digester(record, version)
+    def self.walk_digester(record, algorithm)
       memo = record.instance_variable_get(:@walk_digesters) || record.instance_variable_set(:@walk_digesters, {})
-      memo[version] ||= StandardAudit::Checksum.digester(
-        record.attributes.slice(*CHECKSUM_FIELDS), fields: CHECKSUM_FIELDS, version: version
+      memo[algorithm] ||= StandardAudit::Checksum.digester(
+        record.attributes.slice(*CHECKSUM_FIELDS), fields: CHECKSUM_FIELDS, version: algorithm
       )
     end
     private_class_method :walk_digester
-
-    # The digest versions a row may have been signed with: its marked
-    # version, or — unmarked — legacy first (every pre-0.14 row), then
-    # canonical (a 0.14+ row on a host without the column).
-    def self.checksum_versions_for(record)
-      version = record.checksum_version if checksum_version_column?
-      return StandardAudit::Checksum::VERSIONS if version.nil?
-
-      StandardAudit::Checksum::VERSIONS.include?(version) ? [version] : []
-    end
-    private_class_method :checksum_versions_for
 
     # True when the row's hashed JSON could have been reordered by the store:
     # some object in it has more than one key.
@@ -603,13 +588,10 @@ module StandardAudit
           next
         end
 
-        new_checksum = compute_checksum_value(
-          record.attributes.slice(*CHECKSUM_FIELDS),
-          previous_checksum: previous_checksum
-        )
+        # The row's own created_at picks the algorithm, as verification will.
+        new_checksum = record.compute_checksum_value(previous_checksum: previous_checksum)
         columns = { checksum: new_checksum }
         columns[:previous_checksum] = previous_checksum if chain_parent_column?
-        columns[:checksum_version] = StandardAudit::Checksum::CURRENT_VERSION if checksum_version_column?
         record.update_columns(columns)
 
         previous_checksum = new_checksum
@@ -688,12 +670,15 @@ module StandardAudit
     # verifiable rather than preventing it.
     #
     # `previous_checksum` needs no protection of its own: it is an input to
-    # this row's own digest, so editing it invalidates the row. The same goes
-    # for `checksum_version`: the version number is hashed into a v2 digest.
+    # this row's own digest, so editing it invalidates the row.
+    #
+    # The algorithm is chosen from `created_at`, which is fixed here (Active
+    # Record keeps a timestamp that is already set) so the decision is made
+    # from exactly the value that is stored and that verification re-reads.
     def compute_checksum
+      self.created_at ||= Time.current if has_attribute?(:created_at)
       previous = self.class.chain_tip_checksum
       self.previous_checksum = previous if self.class.chain_parent_column?
-      self.checksum_version = StandardAudit::Checksum::CURRENT_VERSION if self.class.checksum_version_column?
       self.checksum = compute_checksum_value(previous_checksum: previous)
     end
 

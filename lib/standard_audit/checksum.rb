@@ -2,9 +2,12 @@ require "json"
 require "openssl"
 
 module StandardAudit
-  # The row digest, versioned.
+  # The row digest. There are two algorithms; which one a row uses is decided
+  # by its `created_at` against `config.canonical_checksum_since` (default
+  # StandardAudit::CANONICAL_CHECKSUM_CUTOVER), at write time and again at
+  # verification, from the same stored timestamp. Nothing extra is stored.
   #
-  # == Version 1 (legacy, every row written by 0.13.x and earlier)
+  # == Legacy (rows created before the cutover)
   #
   # `SHA256("<parent>|field=value|field=value|…")`, where a Hash value was
   # serialised with `to_json` in whatever key order the Ruby hash had. That is
@@ -13,10 +16,10 @@ module StandardAudit
   # `JSON` — store object keys in their own order (shortest first, then
   # bytewise), so the value read back serialises differently and the digest
   # cannot be reproduced. SQLite keeps JSON as text, so the gem's own suite
-  # never saw it. Version 1 is kept byte-for-byte so existing rows are verified
-  # exactly as they were signed.
+  # never saw it. Kept byte-for-byte so legacy rows are verified exactly as
+  # they were signed.
   #
-  # == Version 2 (canonical, every row written by 0.14.0 and later)
+  # == Canonical (rows created at or after the cutover)
   #
   # `SHA256(canonical_json({"fields" => {…}, "previous_checksum" => …, "v" => 2}))`.
   # Every input is reduced to a form the database cannot change:
@@ -31,15 +34,13 @@ module StandardAudit
   # * Integral floats hash as integers (`1.0` → `1`, `1e20` →
   #   `100000000000000000000`), because a JSON store is free to hand back
   #   either spelling of the same number.
-  # * Times hash as UTC ISO 8601 with microseconds, as in version 1.
+  # * Times hash as UTC ISO 8601 with microseconds, as in the legacy digest.
   # * Strings are escaped at the byte level (`"`, `\` and C0 controls only),
   #   so the output does not depend on the json gem's escaping options.
-  # * nil stays `null`, distinct from `""` — version 1 conflated them.
+  # * nil stays `null`, distinct from `""` — the legacy digest conflated them.
   # * Fields are encoded as a JSON object rather than joined with `|`, so a
   #   value containing `|field=` can no longer move content between adjacent
   #   fields without changing the digest.
-  # * The version number itself is hashed, so a row cannot be re-labelled as
-  #   a different version and still verify.
   #
   # Known limit: a host with `ActiveSupport.parse_json_times = true` reads
   # ISO 8601 strings in JSON back as Time objects, which re-encode at
@@ -49,31 +50,38 @@ module StandardAudit
   module Checksum
     LEGACY = 1
     CANONICAL = 2
-    CURRENT_VERSION = CANONICAL
-    VERSIONS = [LEGACY, CANONICAL].freeze
+    ALGORITHMS = [LEGACY, CANONICAL].freeze
 
     TIME_FORMAT = "%Y-%m-%dT%H:%M:%S.%6NZ".freeze
     ESCAPE = /["\\\x00-\x1f]/n
 
     module_function
 
-    def digest(attrs, fields:, previous_checksum: nil, version: CURRENT_VERSION)
+    # The algorithm for a row created at `created_at`: canonical at or after
+    # `config.canonical_checksum_since`, legacy before it. A row not yet
+    # timestamped is judged by the current time — what a write now would use.
+    def algorithm_for(created_at)
+      created_at ||= Time.current
+      created_at >= StandardAudit.config.canonical_checksum_since ? CANONICAL : LEGACY
+    end
+
+    def digest(attrs, fields:, previous_checksum: nil, version:)
       digester(attrs, fields: fields, version: version).call(previous_checksum)
     end
 
     # A callable `parent -> digest` for one row. The row's own serialisation
     # is built once, so trying many candidate parents (the recovery search)
     # costs one SHA-256 each.
-    def digester(attrs, fields:, version: CURRENT_VERSION)
+    def digester(attrs, fields:, version:)
       case version
       when LEGACY then legacy_digester(attrs, fields: fields)
       when CANONICAL then canonical_digester(attrs, fields: fields)
-      else raise ArgumentError, "unknown checksum version #{version.inspect} (known: #{VERSIONS.join(", ")})"
+      else raise ArgumentError, "unknown checksum algorithm #{version.inspect} (known: #{ALGORITHMS.join(", ")})"
       end
     end
 
-    # Version 1, unchanged since 0.3. Do not "fix" this: it is how every
-    # pre-0.14 row was signed, and it must keep reproducing them.
+    # The legacy digest, unchanged since 0.3. Do not "fix" this: it is how
+    # every pre-cutover row is signed, and it must keep reproducing them.
     def legacy_digest(attrs, fields:, previous_checksum: nil)
       legacy_digester(attrs, fields: fields).call(previous_checksum)
     end
@@ -112,7 +120,7 @@ module StandardAudit
       end
     end
 
-    # The documented v2 payload for a row, as a plain Hash.
+    # The documented canonical payload for a row ("v" => 2 names the format), as a plain Hash.
     def canonical_payload(attrs, fields:, previous_checksum: nil)
       {
         "fields" => fields.to_h { |f| [f, canonical_value(attrs[f])] },
@@ -185,8 +193,8 @@ module StandardAudit
     end
 
     # True when some JSON object inside `value` has more than one key, i.e.
-    # a store that reorders keys could have changed how version 1 serialised
-    # it. A row with no such object cannot fail version 1 because of key order.
+    # a store that reorders keys could have changed how the legacy digest serialised
+    # it. A row with no such object cannot fail the legacy digest because of key order.
     def key_order_ambiguous?(value)
       case value
       when Hash then value.size > 1 || value.each_value.any? { |v| key_order_ambiguous?(v) }
