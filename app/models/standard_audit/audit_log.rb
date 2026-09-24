@@ -597,7 +597,13 @@ module StandardAudit
         # persist — so the hook would not actually be "skipped".
         restore_attributes_from(snapshot)
         Rails.logger.warn("[StandardAudit] before_checksum hook failed: #{e.class}: #{e.message}")
-        Rails.error.report(e, handled: true, context: { audit_event: event_type }) if Rails.respond_to?(:error)
+        if Rails.respond_to?(:error) && Rails.error
+          Rails.error.report(
+            e,
+            handled: true,
+            context: { StandardAudit.config.audit_error_context_key => event_type }
+          )
+        end
         nil
       end
     end

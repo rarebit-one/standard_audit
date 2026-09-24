@@ -1,15 +1,25 @@
 class AddAnonymizedAtToAuditLogs < ActiveRecord::Migration[<%= ActiveRecord::Migration.current_version %>]
-  def change
-    # A nullable column with no default: a metadata-only change on PostgreSQL,
-    # no table rewrite, nothing for StrongMigrations to object to. Idempotent,
-    # so it is safe on a host that already has the column (a 0.12+ install).
-    #
-    # Rows anonymized BEFORE this migration keep a NULL stamp and still fail
-    # `verify_chain` as `digest_mismatch`; there is no way to tell them apart
-    # from tampered rows after the fact. If your erasure records identify them,
-    # stamp them by hand (`update_columns(anonymized_at: ...)`).
-    return if column_exists?(:audit_logs, :anonymized_at)
+  # A nullable column with no default: a metadata-only change on PostgreSQL,
+  # no table rewrite, nothing for StrongMigrations to object to. Idempotent,
+  # so it is safe on a host that already has the column (a 0.12+ install).
+  #
+  # Rows anonymized BEFORE this migration keep a NULL stamp and still fail
+  # `verify_chain` as `digest_mismatch`; there is no way to tell them apart
+  # from tampered rows after the fact. If your erasure records identify them,
+  # stamp them by hand (`update_columns(anonymized_at: ...)`).
+  #
+  # Explicit up/down with `if_not_exists:` / `if_exists:` rather than an early
+  # `return if column_exists?` inside `change`: that return also runs on
+  # rollback, which then deletes the schema_migrations row and silently leaves
+  # the column behind.
+  #
+  # Rolling back drops the column even if it came from your create_audit_logs
+  # migration (0.12+ installs). Those installs do not need this migration.
+  def up
+    add_column :audit_logs, :anonymized_at, :datetime, if_not_exists: true
+  end
 
-    add_column :audit_logs, :anonymized_at, :datetime
+  def down
+    remove_column :audit_logs, :anonymized_at, if_exists: true
   end
 end

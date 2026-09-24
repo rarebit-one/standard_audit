@@ -108,6 +108,32 @@ RSpec.describe "before_checksum hooks" do
       expect(Rails.logger).to have_received(:warn).with(/before_checksum hook failed: RuntimeError: boom/)
     end
 
+    it "reports the failure to Rails.error as handled under the default context key" do
+      error = RuntimeError.new("boom")
+      StandardAudit.config.before_checksum { raise error }
+      allow(Rails.logger).to receive(:warn)
+      allow(Rails.error).to receive(:report)
+
+      write
+
+      expect(Rails.error).to have_received(:report).with(
+        error, handled: true, context: { audit_action: "audit.hook.test" }
+      )
+    end
+
+    it "honours config.audit_error_context_key in the report context" do
+      StandardAudit.config.audit_error_context_key = :audit_event
+      StandardAudit.config.before_checksum { raise "boom" }
+      allow(Rails.logger).to receive(:warn)
+      allow(Rails.error).to receive(:report)
+
+      write
+
+      expect(Rails.error).to have_received(:report).with(
+        an_instance_of(RuntimeError), handled: true, context: { audit_event: "audit.hook.test" }
+      )
+    end
+
     it "still runs the remaining hooks after one raises" do
       ran = []
       StandardAudit.config.before_checksum { raise "boom" }

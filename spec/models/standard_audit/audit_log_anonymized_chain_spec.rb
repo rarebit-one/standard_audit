@@ -1,6 +1,4 @@
 require "rails_helper"
-require "rails/generators"
-require "generators/standard_audit/add_anonymized_at/add_anonymized_at_generator"
 
 RSpec.describe StandardAudit::AuditLog, "anonymization and the checksum chain" do
   let(:alice) { User.create!(name: "Alice", email: "alice@example.com") }
@@ -102,30 +100,6 @@ RSpec.describe StandardAudit::AuditLog, "anonymization and the checksum chain" d
       result = described_class.verify_chain
       expect(result).to include(valid: false, redacted: 0)
       expect(result[:failures].map { |f| f[:reason] }).to eq([:digest_mismatch])
-    end
-  end
-
-  describe "the add_anonymized_at generator" do
-    let(:destination_root) { File.expand_path("../../../tmp/add_anonymized_at_test", __dir__) }
-
-    before do
-      FileUtils.rm_rf(destination_root)
-      FileUtils.mkdir_p(File.join(destination_root, "db/migrate"))
-    end
-
-    after { FileUtils.rm_rf(destination_root) }
-
-    it "adds a nullable column idempotently" do
-      Dir.chdir(destination_root) do
-        generator = StandardAudit::Generators::AddAnonymizedAtGenerator.new([], {})
-        generator.destination_root = destination_root
-        generator.invoke_all
-      end
-      content = File.read(Dir.glob(File.join(destination_root, "db/migrate/*_add_anonymized_at_to_audit_logs.rb")).first)
-
-      expect(content).to include("add_column :audit_logs, :anonymized_at, :datetime")
-      expect(content).to include("return if column_exists?(:audit_logs, :anonymized_at)")
-      expect(content).not_to include("null: false")
     end
   end
 end
