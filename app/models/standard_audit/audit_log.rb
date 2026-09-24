@@ -402,7 +402,7 @@ module StandardAudit
           next
         end
 
-        declared = record.previous_checksum if declared_parents
+        declared = declared_parents ? record.previous_checksum : nil
 
         if record.anonymized?
           redacted += 1
@@ -426,13 +426,16 @@ module StandardAudit
 
             if key_orders.search(attrs, fields: CHECKSUM_FIELDS, checksum: record.checksum, parents: parents)
               reordered += 1
-              report_missing_parent.call(record, declared, expected)
+              # The row verified under a reconstructed order, so the stored-
+              # order `expected` means nothing for a missing-parent report.
+              report_missing_parent.call(record, declared, nil)
             elsif declared.present? && key_orders.exhaustive?(attrs, fields: CHECKSUM_FIELDS)
               # Every key order was tried against the parent the row itself
               # declares, so key order does not explain this row.
               failures << chain_failure(record, expected: expected, reason: :digest_mismatch)
-            elsif report_missing_parent.call(record, declared, expected)
-              # Reported as a removed row, which is the stronger finding.
+            elsif report_missing_parent.call(record, declared, nil)
+              # Reported as a removed row, which is the stronger finding. No
+              # `expected`: no digest was established for this row.
             else
               entry = chain_failure(record, expected: expected, reason: :legacy_key_order_unverifiable)
               unverifiable << entry
