@@ -350,7 +350,7 @@ RSpec.describe StandardAudit::AuditLog, "checksum cutover" do
         described_class.where(id: parent.id).delete_all
 
         result = verify(key_order_search_limit: 0)
-        expect(result[:failures].map { |f| f[:reason] }).to eq([:missing_parent])
+        expect(result[:failures]).to contain_exactly(include(reason: :missing_parent, expected: nil))
         expect(result[:legacy_unverifiable]).to eq(0)
       end
 

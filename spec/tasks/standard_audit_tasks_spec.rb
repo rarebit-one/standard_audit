@@ -62,9 +62,11 @@ RSpec.describe "standard_audit rake tasks" do
   describe "standard_audit:verify" do
     around do |example|
       saved = ENV.values_at("FAIL_ON_LEGACY_UNVERIFIABLE", "KEY_ORDER_SEARCH_LIMIT")
-      example.run
-    ensure
-      ENV["FAIL_ON_LEGACY_UNVERIFIABLE"], ENV["KEY_ORDER_SEARCH_LIMIT"] = saved
+      begin
+        example.run
+      ensure
+        ENV["FAIL_ON_LEGACY_UNVERIFIABLE"], ENV["KEY_ORDER_SEARCH_LIMIT"] = saved
+      end
     end
 
     # A pre-cutover row whose metadata keys were reordered by the store, with
