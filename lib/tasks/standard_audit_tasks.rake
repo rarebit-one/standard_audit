@@ -92,6 +92,7 @@ namespace :standard_audit do
     puts "Records verified: #{result[:verified]}"
     puts "Chain valid: #{result[:valid]}"
     puts "Forked links recovered: #{result[:recovered]}"
+    puts "Anonymized (redacted) records: #{result[:redacted]}" if result[:redacted].to_i.positive?
 
     if result[:failures].any?
       puts "\nUnverifiable records detected: #{result[:failures].size}"

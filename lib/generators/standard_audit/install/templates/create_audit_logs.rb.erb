@@ -21,6 +21,9 @@ class CreateAuditLogs < ActiveRecord::Migration[<%= ActiveRecord::Migration.curr
       # share a parent, so the log is a DAG rather than a strict line; storing
       # the parent is what keeps every row verifiable when it forks.
       t.string :previous_checksum, limit: 64
+      # Set by AuditLog.anonymize_actor! (GDPR erasure). verify_chain counts a
+      # stamped row as `redacted` instead of a digest failure.
+      t.datetime :anonymized_at
       t.timestamps
     end
 
