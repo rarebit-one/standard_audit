@@ -1,0 +1,37 @@
+class AddChecksumVersionToAuditLogs < ActiveRecord::Migration[<%= ActiveRecord::Migration.current_version %>]
+  # Records which digest algorithm signed each audit row (standard_audit
+  # 0.14.0, fundbright/delivery-ops#689).
+  #
+  #   NULL — written before this migration: the legacy (v1) digest, which
+  #          hashed metadata in Ruby key order. verify_chain checks these as
+  #          v1, then v2, then searches for the key order they were signed in.
+  #   2    — the canonical (v2) digest, independent of jsonb key order.
+  #          verify_chain checks these strictly as v2.
+  #
+  # Existing rows are deliberately NOT backfilled. A NULL is the honest label
+  # for them, and writing a version onto a row claims something about how it
+  # was signed that nobody checked.
+  #
+  # A nullable column with no default and no index: a catalog-only change on
+  # PostgreSQL (no table rewrite, no long lock). StrongMigrations' built-in
+  # checks accept it as is; `assert_safe` (the family convention, as in
+  # standard_id) keeps a host-added custom check from blocking an operation
+  # that is safe by construction, and is a no-op without StrongMigrations.
+  #
+  # Explicit up/down with `if_not_exists:` / `if_exists:`, so it is idempotent
+  # (safe on a host whose create_audit_logs migration already has the column —
+  # a 0.14+ install) and reversible.
+  def up
+    assert_safe { add_column :audit_logs, :checksum_version, :integer, limit: 2, if_not_exists: true }
+  end
+
+  def down
+    assert_safe { remove_column :audit_logs, :checksum_version, if_exists: true }
+  end
+
+  private
+
+  def assert_safe(&block)
+    respond_to?(:safety_assured) ? safety_assured(&block) : yield
+  end
+end

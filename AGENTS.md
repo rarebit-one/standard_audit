@@ -29,6 +29,16 @@ bundle exec bundler-audit --update
 The dummy app under `spec/dummy/` is in-memory SQLite; `spec/rails_helper.rb`
 runs migrations on boot, so there is no separate `db:setup` step.
 
+CI also runs the suite on PostgreSQL (`test (postgres)`), because `jsonb`
+reorders object keys and SQLite does not. Locally:
+
+```bash
+DATABASE_URL=postgres://user:pass@host:port/standard_audit_test bundle exec rspec
+```
+
+The helper DROPS and recreates the `public` schema of that database on boot
+(it refuses a database whose name lacks `test`), so point it at a throwaway.
+
 ## Project Structure
 
 ```
@@ -44,6 +54,8 @@ standard_audit/
 │   ├── auditable.rb                  # Concern for actor/target models
 │   ├── audit_scope.rb                # Concern for tenant/scope models
 │   ├── configuration.rb              # Configuration object
+│   ├── checksum.rb                   # Row digest, versioned: v1 legacy, v2 canonical JSON
+│   ├── checksum/key_order_search.rb  # Reconstructs the key order a v1 row was signed with
 │   ├── engine.rb                     # Wires subscribers at boot
 │   ├── metadata_filter.rb            # Sensitive-key redaction (both write paths)
 │   ├── sensitive_keys_dry_run.rb     # Read-only "what would this rule strip?"
@@ -59,9 +71,10 @@ standard_audit/
 │   ├── install/                      # `rails g standard_audit:install`
 │   ├── add_previous_checksum/        # previous_checksum column (< 0.8 hosts)
 │   ├── add_anonymized_at/            # anonymized_at column (< 0.12 hosts)
+│   ├── add_checksum_version/         # checksum_version column (< 0.14 hosts)
 │   └── migration_number.rb           # sorts after the host's latest migration
 └── spec/
-    ├── dummy/                        # Test Rails app (SQLite in-memory)
+    ├── dummy/                        # Test Rails app (SQLite in-memory; Postgres with DATABASE_URL)
     ├── jobs/, models/, lib/, generators/
     ├── rails_helper.rb
     └── spec_helper.rb
@@ -219,7 +232,11 @@ reference-preload memo all do not run on that path (the batch path computes
 checksums itself). A host callback that must apply to batched rows has to set
 the column on the buffered attrs, not in a model hook. Each row is given a
 UUIDv7 id (sorted to match insert order) and chained checksum. `AuditLog.compute_checksum_value` hashes a canonical
-serialisation of `CHECKSUM_FIELDS` plus the previous row's checksum;
+serialisation of `CHECKSUM_FIELDS` plus the previous row's checksum
+(`StandardAudit::Checksum`, version 2 since 0.14.0; version 1 is kept
+byte-for-byte for legacy rows — **never change a released digest version**,
+add a new one and bump `CURRENT_VERSION`). Any write path must also stamp
+`checksum_version` when the column exists;
 `AuditLog.verify_chain` and `AuditLog.backfill_checksums!` walk the chain
 in `(created_at, id)` order. Concurrent writers can fork the chain — see
 the inline note on `compute_checksum`.

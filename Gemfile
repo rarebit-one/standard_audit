@@ -10,6 +10,11 @@ gem "puma"
 
 gem "sqlite3"
 
+# The Postgres CI leg (DATABASE_URL set) runs the suite against a real `jsonb`
+# column. SQLite keeps JSON as text in insertion order, which is exactly why
+# the metadata key-order bug (fundbright/delivery-ops#689) went unseen.
+gem "pg"
+
 group :development, :test do
   gem "rspec-rails", "~> 8.0"
   gem "shoulda-matchers", "~> 7.0"

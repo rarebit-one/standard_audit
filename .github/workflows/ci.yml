@@ -40,3 +40,51 @@ jobs:
       extra-lint-commands: |
         bundle exec brakeman --no-pager --force
         bundle exec bundler-audit --update
+
+  # The suite again, against PostgreSQL with a `jsonb` metadata column — the
+  # storage every consumer app uses. The dummy app is in-memory SQLite, which
+  # keeps JSON as text in insertion order and serialises writers, so it is
+  # structurally blind to storage-side behaviour: the metadata key-order bug
+  # (fundbright/delivery-ops#689) sat behind a green SQLite suite while 67% of
+  # one production log failed verify_chain. The SQLite matrix above stays.
+  #
+  # A separate job because the reusable gem CI has no `services:` hook. It
+  # needs a container runtime, so it stays on a GitHub-hosted runner.
+  test-postgres:
+    name: test (postgres)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:44c4ee9810eff91f7eab4d822642e01115b1a9eccce4bcbdde7604752d68eac6
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: standard_audit_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+          --mount type=tmpfs,destination=/var/lib/postgresql/data
+    env:
+      RAILS_ENV: test
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/standard_audit_test
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@a0102e0972be65f351c307e2d64b9314a57c8073 # v1.324.0
+        with:
+          ruby-version: 4.0.4
+          bundler-cache: true
+
+      - name: Run tests on PostgreSQL
+        run: bundle exec rspec

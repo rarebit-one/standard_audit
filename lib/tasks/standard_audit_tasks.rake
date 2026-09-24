@@ -85,17 +85,35 @@ namespace :standard_audit do
 
   desc "Verify audit log chain integrity (tamper detection)"
   task verify: :environment do
-    result = StandardAudit::AuditLog.verify_chain
+    # ACCEPT_LEGACY_UNVERIFIABLE_BEFORE=2026-09-25T00:00:00Z — a policy
+    # decision, see AuditLog.verify_chain: legacy rows created before it whose
+    # key order cannot be reconstructed are counted, not failed.
+    # KEY_ORDER_SEARCH_LIMIT=5040 — orderings tried per legacy row.
+    options = {}
+    if (cutover = ENV["ACCEPT_LEGACY_UNVERIFIABLE_BEFORE"].presence)
+      options[:accept_legacy_unverifiable_before] = Time.iso8601(cutover)
+    end
+    if (limit = ENV["KEY_ORDER_SEARCH_LIMIT"].presence)
+      options[:key_order_search_limit] = Integer(limit, 10)
+    end
+
+    result = StandardAudit::AuditLog.verify_chain(**options)
 
     puts "Audit Log Chain Verification"
     puts "============================="
     puts "Records verified: #{result[:verified]}"
     puts "Chain valid: #{result[:valid]}"
     puts "Forked links recovered: #{result[:recovered]}"
+    puts "Legacy rows verified by key-order reconstruction: #{result[:reordered]}" if result[:reordered].to_i.positive?
     puts "Anonymized (redacted) records: #{result[:redacted]}" if result[:redacted].to_i.positive?
+    if result[:legacy_unverifiable].to_i.positive?
+      accepted = options.key?(:accept_legacy_unverifiable_before) ? " (accepted before #{options[:accept_legacy_unverifiable_before].iso8601}: not failures)" : ""
+      puts "Legacy rows unverifiable (metadata key order lost): #{result[:legacy_unverifiable]}#{accepted}"
+    end
 
     if result[:failures].any?
       puts "\nUnverifiable records detected: #{result[:failures].size}"
+      result[:failures].map { |failure| failure[:reason] }.tally.each { |reason, n| puts "  #{reason}: #{n}" }
       result[:failures].each do |failure|
         puts "  #{failure[:id]} (#{failure[:event_type]}) at #{failure[:created_at]} — #{failure[:reason]}"
       end

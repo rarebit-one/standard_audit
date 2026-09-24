@@ -790,7 +790,8 @@ reproduce its own digest. Since 0.12.0 its stored `checksum` is left untouched
 
 ```ruby
 StandardAudit::AuditLog.verify_chain
-# => { valid: true, verified: 5576, recovered: 0, redacted: 1, failures: [] }
+# => { valid: true, verified: 5576, recovered: 0, reordered: 0, redacted: 1,
+#      legacy_unverifiable: 0, failures: [] }
 ```
 
 A redacted row's declared parent is still checked, so deleting the row before
@@ -886,7 +887,8 @@ own digest, so editing it invalidates the row.
 
 ```ruby
 result = StandardAudit::AuditLog.verify_chain
-# => { valid: true, verified: 5577, recovered: 0, redacted: 0, failures: [] }
+# => { valid: true, verified: 5577, recovered: 0, reordered: 0, redacted: 0,
+#      legacy_unverifiable: 0, failures: [] }
 ```
 
 `redacted` counts rows anonymized by `anonymize_actor!` — see "Anonymization
@@ -902,8 +904,13 @@ and the checksum chain".
   `created_at`, so rows whose two timestamps disagree can leave a hole rather
   than a pruned start, and a hole is reported — truthfully, since rows really
   are missing.
+  Legacy (pre-0.14) rows can also carry `reason: :legacy_key_order_unverifiable`,
+  and a row marked with an unknown `checksum_version` carries
+  `reason: :unsupported_checksum_version` — see "Checksum algorithm versions".
 - `recovered` counts rows with no `previous_checksum` whose parent had to be
   found by searching back through recent digests — see below.
+- `reordered` and `legacy_unverifiable` concern legacy rows only — see
+  "Checksum algorithm versions".
 - `verify_chain(scope: org)` skips the missing-parent check, because the log is
   global and a scoped row's parent usually belongs to another scope.
 
@@ -913,6 +920,93 @@ alike, so a design that tolerates the first cannot detect the second. The
 previous strict-line reading did not actually detect insertions either — it
 reported every concurrent append as tampering, which on one production log meant
 67% of rows red and any real signal lost in the noise.
+
+### Checksum algorithm versions
+
+Up to 0.13.x the digest hashed `metadata.to_json` in the order the Ruby hash
+was built. PostgreSQL `jsonb` (and MySQL `JSON`) store object keys in their own
+order — shortest first, then bytewise — so a row whose metadata had more than
+one key could only be verified if its keys happened to be written in that
+order. On one production log that was 67% of rows
+([fundbright/delivery-ops#689](https://github.com/fundbright/delivery-ops/issues/689)).
+SQLite keeps JSON as text in insertion order, so the gem's own suite never saw
+it; CI now runs the suite on PostgreSQL too.
+
+| Version | Written by | Digest |
+|---------|------------|--------|
+| 1 (legacy) | ≤ 0.13.x | `SHA256("<parent>\|field=value\|…")`, Hash values via `to_json` in Ruby key order. Kept byte-for-byte so old rows verify as they were signed. |
+| 2 (canonical) | ≥ 0.14.0 | `SHA256` of canonical JSON `{"fields": {…}, "previous_checksum": …, "v": 2}`: JSON values round-tripped exactly as the column stores them, object keys sorted bytewise at every depth, integral floats as integers, times as UTC ISO 8601 (µs), nil distinct from `""`, no separator ambiguity, the version itself hashed. |
+
+`StandardAudit::Checksum` holds both; `AuditLog#compute_checksum_value(version:)`
+selects one (default: 2).
+
+**The version column.** `rails g standard_audit:add_checksum_version` adds a
+nullable `checksum_version` (0.14+ installs have it). New rows are stamped `2`;
+existing rows stay `NULL` — nothing is backfilled, because stamping a version
+onto a row claims something about how it was signed that nobody checked. The
+version is hashed into a v2 digest, so it cannot be edited to change how a row
+is judged. Without the column, 0.14 still *writes* v2 digests, but cannot mark
+them, so every row has to be tried both ways and a tampered new row with
+multi-key metadata is indistinguishable from a legacy one. Install the column.
+
+**How `verify_chain` judges each row:**
+
+| Row | Checked as | Outcome when it does not reproduce |
+|-----|------------|------------------------------------|
+| `checksum_version = 2` | v2 only (declared parent, else preceding row, else the recovery search) | `:digest_mismatch`. Never classified as legacy. |
+| `checksum_version` NULL / no column | v1, then v2 — with the same parent rules and recovery search | the key-order search below |
+| any other value | — | `:unsupported_checksum_version` |
+
+For an unmarked row that neither version reproduces:
+
+1. **Key-order reconstruction.** The insertion order v1 hashed cannot be read
+   back — jsonb's order depends only on the key set, so every insertion order
+   stores identically — but it can be *searched*. If some ordering of the
+   stored keys (at every depth), hashed with the row's parent, reproduces the
+   digest the row has held since it was written, that is a witness in the same
+   sense as the parent recovery search: a row whose values were edited
+   reproduces no ordering. Such rows count in `reordered` and are valid. The
+   search enumerates at most `key_order_search_limit:` orderings per row
+   (default 720, i.e. six keys in one object), tries orders learned from
+   earlier rows with the same keys first (an event is usually built by one
+   code path, so most rows cost one hash), and tries the declared parent — or,
+   without one, the preceding row and "no parent". It is not combined with the
+   256-row recovery window.
+2. **`:digest_mismatch`** when the search was exhaustive against the parent the
+   row *declares*: no key order explains the row, so its content does not
+   match what was signed. Also for any row with no multi-key object — key order
+   cannot be why it fails.
+3. **`:missing_parent`** when its declared parent is gone.
+4. **`:legacy_key_order_unverifiable`** otherwise — a row with a multi-key
+   object whose order could not be reconstructed (more orderings than the
+   limit, or no declared parent), and every other check passed.
+
+**What `valid` means.** `valid` is `failures.empty?`, as before, and
+`:legacy_key_order_unverifiable` rows **are failures by default**: "cannot be
+proven either way" is not "untampered" — an edited legacy row looks exactly
+like one whose key order was lost. Whether to accept them is a policy decision
+for the host, and `verify_chain` makes it explicit:
+
+```ruby
+StandardAudit::AuditLog.verify_chain(accept_legacy_unverifiable_before: Time.utc(2026, 9, 26))
+# => { valid: true, legacy_unverifiable: <n>, failures: [], … }
+```
+
+Rows created before that time are left out of `failures` and only counted in
+`legacy_unverifiable`; rows created at or after it are always failures. Pick
+the time the upgrade finished deploying: it also stops a post-upgrade row from
+being passed off as legacy by clearing its `checksum_version`. The rake task
+takes `ACCEPT_LEGACY_UNVERIFIABLE_BEFORE=<ISO 8601>` and
+`KEY_ORDER_SEARCH_LIMIT=<n>`.
+
+**Cost.** A v2 row costs one JSON round trip and one hash. A legacy row that
+needs the search costs up to `limit × 2` hashes the first time a key set is
+seen and usually one after that; a row that cannot be reconstructed always
+pays the full search. Raise the limit (e.g. 5040 for seven keys) if your
+events carry wider metadata and you can afford the time.
+
+**Re-sealing legacy rows is not provided.** See the 0.14.0 CHANGELOG for why
+and for what a safe version would need.
 
 ### Rows written before 0.8.0
 
@@ -950,6 +1044,7 @@ It is for rows that never had a checksum at all (pre-feature data).
 | `standard_audit:install` | `audit_logs` migration + initializer (new installs) |
 | `standard_audit:add_previous_checksum` | Adds `previous_checksum` (upgrading from < 0.8) |
 | `standard_audit:add_anonymized_at` | Adds `anonymized_at` (upgrading from < 0.12) |
+| `standard_audit:add_checksum_version` | Adds `checksum_version` (upgrading from < 0.14) — see "Checksum algorithm versions" |
 
 The upgrade generators number their migration one second after the newest
 migration already in `db/migrate` when that is later than now (0.13.0+), so the
@@ -962,6 +1057,8 @@ the 0.2 → 0.3 upgrade path, was removed in 0.13.0.)
 ```bash
 # Verify chain integrity (exits non-zero on failures)
 rake standard_audit:verify
+# ...accepting unreconstructable legacy rows created before a cutover (policy)
+ACCEPT_LEGACY_UNVERIFIABLE_BEFORE=2026-09-26T00:00:00Z rake standard_audit:verify
 
 # Record the parent digest each existing row was signed against
 rake standard_audit:relink_checksums
@@ -1008,6 +1105,10 @@ For PostgreSQL, edit the generated migration to use `jsonb` instead of `json`:
 ```ruby
 t.jsonb :metadata, default: {}
 ```
+
+`jsonb` and MySQL `JSON` reorder object keys. Since 0.14.0 the checksum does
+not depend on key order; rows written by earlier versions may — see
+"Checksum algorithm versions".
 
 ## Best Practices
 

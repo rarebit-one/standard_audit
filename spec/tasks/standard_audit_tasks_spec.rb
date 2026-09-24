@@ -59,6 +59,50 @@ RSpec.describe "standard_audit rake tasks" do
     end
   end
 
+  describe "standard_audit:verify" do
+    around do |example|
+      saved = ENV.values_at("ACCEPT_LEGACY_UNVERIFIABLE_BEFORE", "KEY_ORDER_SEARCH_LIMIT")
+      example.run
+    ensure
+      ENV["ACCEPT_LEGACY_UNVERIFIABLE_BEFORE"], ENV["KEY_ORDER_SEARCH_LIMIT"] = saved
+    end
+
+    # A 0.13-era row whose metadata keys were reordered by the store and whose
+    # original order is out of reach of the search (limit 0).
+    def lost_order_row
+      now = Time.current.floor(6)
+      id = SecureRandom.uuid_v7
+      attrs = { "id" => id, "event_type" => "legacy", "metadata" => { probe: 1, run: 2 }, "occurred_at" => now }
+      digest = StandardAudit::Checksum.legacy_digest(attrs, fields: StandardAudit::AuditLog::CHECKSUM_FIELDS)
+      StandardAudit::AuditLog.insert_all!([{ id: id, event_type: "legacy", metadata: { run: 2, probe: 1 },
+        occurred_at: now, checksum: digest, created_at: now, updated_at: now }])
+    end
+
+    it "passes on a clean chain" do
+      create_log
+
+      expect { run_task("standard_audit:verify") }.to output(/Chain valid: true/).to_stdout
+    end
+
+    it "fails on legacy rows it cannot verify, naming the reason" do
+      lost_order_row
+      ENV["KEY_ORDER_SEARCH_LIMIT"] = "0"
+
+      expect {
+        expect { run_task("standard_audit:verify") }.to raise_error(SystemExit)
+      }.to output(/legacy_key_order_unverifiable: 1/).to_stdout.and output(/Chain verification failed/).to_stderr
+    end
+
+    it "accepts them before an explicit cutover" do
+      lost_order_row
+      ENV["KEY_ORDER_SEARCH_LIMIT"] = "0"
+      ENV["ACCEPT_LEGACY_UNVERIFIABLE_BEFORE"] = 1.minute.from_now.utc.iso8601
+
+      expect { run_task("standard_audit:verify") }
+        .to output(/Chain valid: true.*unverifiable \(metadata key order lost\): 1 \(accepted before/m).to_stdout
+    end
+  end
+
   describe "standard_audit:cleanup" do
     it_behaves_like "a retention-window task", "cleanup"
 

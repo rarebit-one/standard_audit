@@ -1,6 +1,7 @@
 require "standard_audit/version"
 require "standard_audit/engine"
 require "standard_audit/configuration"
+require "standard_audit/checksum"
 require "standard_audit/metadata_filter"
 require "standard_audit/record_reference"
 require "standard_audit/sensitive_keys_dry_run"
@@ -271,6 +272,7 @@ module StandardAudit
     def flush_batch(buffer)
       now = Time.current
       records_parent = StandardAudit::AuditLog.chain_parent_column?
+      records_version = StandardAudit::AuditLog.checksum_version_column?
       previous_checksum = StandardAudit::AuditLog.chain_tip_checksum
 
       # Generate sorted UUIDs to ensure batch ordering matches id ordering.
@@ -291,6 +293,7 @@ module StandardAudit
           previous_checksum: previous_checksum
         )
         row[:previous_checksum] = previous_checksum if records_parent
+        row[:checksum_version] = StandardAudit::Checksum::CURRENT_VERSION if records_version
         row[:checksum] = checksum
         previous_checksum = checksum
         row
