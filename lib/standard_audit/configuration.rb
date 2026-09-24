@@ -24,8 +24,11 @@ module StandardAudit
       @target_extractor = ->(payload) { payload[:target] }
       @scope_extractor = ->(payload) { payload[:scope] }
 
+      # Tries StandardId's `Current.account` first, then the Rails-generator
+      # convention `Current.user`. Each is respond_to?-guarded, so an app that
+      # defines only one of them (or no `Current` at all) resolves cleanly.
       @current_actor_resolver = -> {
-        defined?(Current) && Current.respond_to?(:user) ? Current.user : nil
+        Configuration.current_attribute(:account) || Configuration.current_attribute(:user)
       }
       @current_request_id_resolver = -> {
         defined?(Current) && Current.respond_to?(:request_id) ? Current.request_id : nil
@@ -36,8 +39,12 @@ module StandardAudit
       @current_user_agent_resolver = -> {
         defined?(Current) && Current.respond_to?(:user_agent) ? Current.user_agent : nil
       }
+      # Tries StandardId's `Current.session&.id` first, then a plain
+      # `Current.session_id` attribute.
       @current_session_id_resolver = -> {
-        defined?(Current) && Current.respond_to?(:session_id) ? Current.session_id : nil
+        session = Configuration.current_attribute(:session)
+        session_id = session.id if session.respond_to?(:id)
+        session_id || Configuration.current_attribute(:session_id)
       }
 
       # Note: :authorization filters the HTTP Authorization header value.
@@ -167,6 +174,14 @@ module StandardAudit
       # compliance-safe default that never auto-deletes). A host app can still
       # override with `config.retention_days = N` in its initializer.
       @retention_days = self.class.retention_days_from_env
+    end
+
+    # Reads `::Current.<name>` when a top-level `Current` exists and responds
+    # to it; nil otherwise. The building block of the default resolvers.
+    def self.current_attribute(name)
+      return nil unless defined?(::Current) && ::Current.respond_to?(name)
+
+      ::Current.public_send(name)
     end
 
     # Parses STANDARD_AUDIT_RETENTION_DAYS into a positive Integer, or nil when

@@ -96,7 +96,7 @@ StandardAudit.record("orders.created",
 )
 ```
 
-When `actor` is omitted, it falls back to the configured `current_actor_resolver` (which reads from `Current.user` by default).
+When `actor` is omitted, it falls back to the configured `current_actor_resolver` (which reads `Current.account`, then `Current.user`, by default).
 
 ### ActiveSupport::Notifications
 
@@ -309,11 +309,12 @@ StandardAudit.configure(baseline: true) do |config|
   # -- Current Attribute Resolvers --
   # Fallbacks used when payload values are nil.
   # Designed to work with Rails Current attributes.
-  config.current_actor_resolver      = -> { Current.user }
+  # (Defaults shown in simplified form — each is respond_to?-guarded.)
+  config.current_actor_resolver      = -> { Current.account || Current.user }
   config.current_request_id_resolver = -> { Current.request_id }
   config.current_ip_address_resolver = -> { Current.ip_address }
   config.current_user_agent_resolver = -> { Current.user_agent }
-  config.current_session_id_resolver = -> { Current.session_id }
+  config.current_session_id_resolver = -> { Current.session&.id || Current.session_id }
 
   # -- Sensitive Data --
   # Keys automatically stripped from metadata. Matching is EXACT on the key
@@ -386,7 +387,26 @@ end
 
 ### Default Current Attribute Resolvers
 
-Out of the box, StandardAudit reads from `Current` if it responds to the relevant method. This means if your app (or an auth library like StandardId) populates `Current.user`, `Current.request_id`, etc., audit logs automatically capture request context with zero configuration.
+Out of the box, StandardAudit reads from a top-level `Current` if it responds to the relevant method:
+
+| Column       | Default resolution (first non-nil wins)          |
+|--------------|--------------------------------------------------|
+| actor        | `Current.account`, then `Current.user`           |
+| session_id   | `Current.session&.id`, then `Current.session_id` |
+| request_id   | `Current.request_id`                             |
+| ip_address   | `Current.ip_address`                             |
+| user_agent   | `Current.user_agent`                             |
+
+The `account`/`session` pair is what StandardId's `Current` exposes, so a StandardId app gets actor and session attribution with zero configuration (since 0.12.0 — earlier versions read only `Current.user`/`Current.session_id`, which StandardId does not define). Apps following the Rails generator convention (`Current.user`) keep working unchanged.
+
+**Replace your host code with:** nothing. If your initializer carries
+
+```ruby
+config.current_actor_resolver = -> { Current.account }
+config.current_session_id_resolver = -> { Current.session&.id }
+```
+
+both lines are now the defaults and can be deleted.
 
 ## Query Interface
 

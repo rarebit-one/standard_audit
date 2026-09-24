@@ -186,6 +186,65 @@ RSpec.describe StandardAudit::Configuration do
         expect { config.current_request_id_resolver.call }.not_to raise_error
       end
     end
+
+    context "with a StandardId-shaped Current (account + session)" do
+      before do
+        stub_current(:account, :session)
+      end
+
+      it "resolves the actor from Current.account" do
+        Current.account = :the_account
+        expect(config.current_actor_resolver.call).to eq(:the_account)
+      end
+
+      it "resolves the session id from Current.session.id" do
+        Current.session = Struct.new(:id).new("sess-1")
+        expect(config.current_session_id_resolver.call).to eq("sess-1")
+      end
+
+      it "resolves nil when nothing is set" do
+        expect(config.current_actor_resolver.call).to be_nil
+        expect(config.current_session_id_resolver.call).to be_nil
+      end
+    end
+
+    context "with a Rails-convention Current (user + session_id)" do
+      before do
+        stub_current(:user, :session_id)
+      end
+
+      it "resolves the actor from Current.user" do
+        Current.user = :the_user
+        expect(config.current_actor_resolver.call).to eq(:the_user)
+      end
+
+      it "resolves the session id from Current.session_id" do
+        Current.session_id = "sess-2"
+        expect(config.current_session_id_resolver.call).to eq("sess-2")
+      end
+    end
+
+    context "with a Current exposing both account and user" do
+      before do
+        stub_current(:account, :user, :session, :session_id)
+      end
+
+      it "prefers Current.account, falling back to Current.user when account is nil" do
+        Current.user = :the_user
+        expect(config.current_actor_resolver.call).to eq(:the_user)
+
+        Current.account = :the_account
+        expect(config.current_actor_resolver.call).to eq(:the_account)
+      end
+
+      it "prefers Current.session.id, falling back to Current.session_id" do
+        Current.session_id = "plain"
+        expect(config.current_session_id_resolver.call).to eq("plain")
+
+        Current.session = Struct.new(:id).new("from-session")
+        expect(config.current_session_id_resolver.call).to eq("from-session")
+      end
+    end
   end
 
   describe "custom sensitive_keys" do
