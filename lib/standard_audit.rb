@@ -131,8 +131,9 @@ module StandardAudit
     # batches are persisted. Nested batches flush independently.
     # Every write path buffers here, including events delivered by the
     # ActiveSupport::Notifications and Rails.event subscribers (the former
-    # bypassed the buffer before 0.12.0). `before_write` runs before buffering;
-    # `before_checksum` hooks do not run (insert_all! instantiates no model).
+    # bypassed the buffer before 0.12.0). `before_write` runs before buffering,
+    # and `before_checksum` hooks run at flush time, before each row's checksum
+    # is computed — the same pipeline as a non-batched write.
     # Note: uses Thread.current for storage, which is not fiber-safe.
     # Apps using async adapters (Falcon) should avoid concurrent batches.
     def batch
@@ -254,11 +255,11 @@ module StandardAudit
       ids = buffer.size.times.map { SecureRandom.uuid_v7 }.sort
 
       rows = buffer.each_with_index.map do |attrs, i|
-        row = attrs.merge(
+        row = StandardAudit::AuditLog.apply_before_checksum_hooks(attrs.merge(
           id: ids[i],
           created_at: now,
           updated_at: now
-        )
+        ))
         checksum = StandardAudit::AuditLog.compute_checksum_value(
           row.stringify_keys,
           previous_checksum: previous_checksum

@@ -236,9 +236,9 @@ module StandardAudit
     # supplied by a concern mixed into the model). A callable is passed the
     # instance.
     #
-    # NOTE: batched writes (`StandardAudit.batch { … }` → `insert_all!`) never
-    # instantiate a model, so hooks do not run there. A batched writer that
-    # needs a derived column has to set it on the buffered attrs.
+    # Batched writes (`StandardAudit.batch { … }` → `insert_all!`) run the same
+    # hooks at flush time, against an unsaved instance built from each
+    # buffered row, before that row's checksum is computed (since 0.12.0).
     def before_checksum(hook = nil, &block)
       hook ||= block
       raise ArgumentError, "before_checksum needs a callable, a Symbol, or a block" if hook.nil?

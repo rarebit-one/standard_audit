@@ -196,14 +196,57 @@ RSpec.describe "before_checksum hooks" do
     end
   end
 
-  it "does not run on the batched write path, which never instantiates a model" do
-    ran = []
-    StandardAudit.config.before_checksum { ran << :hook }
+  describe "on the batched write path" do
+    let(:subscriber) { StandardAudit::Subscriber.new }
 
-    StandardAudit.batch { StandardAudit.record("audit.hook.batched") }
+    after { subscriber.teardown! }
 
-    expect(StandardAudit::AuditLog.count).to eq(1)
-    expect(ran).to be_empty
+    it "runs for a direct record inside batch" do
+      ran = []
+      StandardAudit.config.before_checksum { |log| ran << log.event_type }
+
+      StandardAudit.batch { StandardAudit.record("audit.hook.batched") }
+
+      expect(StandardAudit::AuditLog.count).to eq(1)
+      expect(ran).to eq(["audit.hook.batched"])
+    end
+
+    it "runs for an event emitted inside batch, and the row still verifies" do
+      org = organisation
+      StandardAudit.config.subscribe_to(/\Aaudit\.hook\./)
+      StandardAudit.config.before_checksum { |log| log.scope = org }
+      subscriber.setup!
+
+      StandardAudit.batch do
+        ActiveSupport::Notifications.instrument("audit.hook.evented", note: "x")
+        ActiveSupport::Notifications.instrument("audit.hook.evented", note: "y")
+      end
+
+      logs = StandardAudit::AuditLog.where(event_type: "audit.hook.evented")
+      expect(logs.map(&:scope)).to eq([org, org])
+      expect(StandardAudit::AuditLog.verify_chain).to include(valid: true, failures: [])
+    end
+
+    it "supports Symbol hooks naming an AuditLog method" do
+      StandardAudit::AuditLog.class_eval { def batch_hook_marker = (self.request_id = "from-hook") }
+      StandardAudit.config.before_checksum :batch_hook_marker
+
+      StandardAudit.batch { StandardAudit.record("audit.hook.symbol") }
+
+      expect(StandardAudit::AuditLog.last.request_id).to eq("from-hook")
+      expect(StandardAudit::AuditLog.verify_chain[:valid]).to be(true)
+    ensure
+      StandardAudit::AuditLog.remove_method(:batch_hook_marker) if StandardAudit::AuditLog.method_defined?(:batch_hook_marker)
+    end
+
+    it "isolates a failing hook, as on the save path" do
+      StandardAudit.config.before_checksum { raise "boom" }
+      allow(Rails.logger).to receive(:error)
+
+      StandardAudit.batch { StandardAudit.record("audit.hook.failing") }
+
+      expect(StandardAudit::AuditLog.where(event_type: "audit.hook.failing").count).to eq(1)
+    end
   end
 
   it "runs on the StandardAudit.record path" do

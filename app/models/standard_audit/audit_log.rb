@@ -213,6 +213,20 @@ module StandardAudit
       OpenSSL::Digest::SHA256.hexdigest(canonical)
     end
 
+    # Runs the configured `before_checksum` hooks against a row that will be
+    # written by `insert_all!` (the `StandardAudit.batch` flush), so batched
+    # writes get the same derived columns as a `save!`. The row is loaded into
+    # an unsaved instance, the hooks run exactly as on `before_create`, and the
+    # resulting attributes are returned for checksumming. With no hooks
+    # registered the row is returned untouched and no model is built.
+    def self.apply_before_checksum_hooks(row)
+      return row if StandardAudit.config.before_checksum_hooks.blank?
+
+      log = new(row)
+      log.send(:run_before_checksum_hooks)
+      log.attributes.symbolize_keys.except(:checksum, :previous_checksum)
+    end
+
     # The checksum of the most recent row — the node a new row links to.
     def self.chain_tip_checksum
       order(created_at: :desc, id: :desc).limit(1).pick(:checksum)
