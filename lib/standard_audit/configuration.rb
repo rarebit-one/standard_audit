@@ -13,7 +13,8 @@ module StandardAudit
                   :anonymizable_metadata_keys, :retention_days,
                   :audit_catalogue, :verify_audit_declarations,
                   :raise_on_audit_write_error, :audit_write_error_handler,
-                  :audit_error_context_key, :error_reporter
+                  :audit_error_context_key, :error_reporter,
+                  :canonical_checksum_since
 
     def initialize
       @subscriptions = []
@@ -127,6 +128,16 @@ module StandardAudit
       # `before_create` AFTER the UUID is assigned and BEFORE the checksum is
       # computed. See Configuration#before_checksum.
       @before_checksum_hooks = []
+
+      # Rows whose `created_at` is at or after this time are signed with the
+      # canonical checksum (object keys sorted, independent of how jsonb
+      # stores them) and verified strictly with it; earlier rows keep the
+      # legacy algorithm. Defaults to StandardAudit::CANONICAL_CHECKSUM_CUTOVER.
+      # Override only if your rollout of this release slips past that date,
+      # set it BEFORE the new time arrives, and never change it afterwards:
+      # verification recomputes the same decision from each row's stored
+      # created_at, so moving it re-judges rows under the other algorithm.
+      @canonical_checksum_since = StandardAudit::CANONICAL_CHECKSUM_CUTOVER
 
       @anonymizable_metadata_keys = %i[email name ip_address]
 

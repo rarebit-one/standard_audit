@@ -193,24 +193,28 @@ module StandardAudit
 
     # Recomputes the checksum from the record's current field values and the
     # given previous checksum. Useful for verification without saving.
-    def compute_checksum_value(previous_checksum: nil)
+    # The algorithm (StandardAudit::Checksum::LEGACY or CANONICAL) follows the
+    # row's `created_at` against `config.canonical_checksum_since`; pass
+    # `version:` to force one.
+    def compute_checksum_value(previous_checksum: nil, version: nil)
       self.class.compute_checksum_value(
         attributes.slice(*CHECKSUM_FIELDS),
-        previous_checksum: previous_checksum
+        previous_checksum: previous_checksum,
+        version: version || StandardAudit::Checksum.algorithm_for(created_at)
       )
     end
 
-    def self.compute_checksum_value(attrs, previous_checksum: nil)
-      canonical = CHECKSUM_FIELDS.map { |f|
-        value = attrs[f]
-        value = value.to_json if value.is_a?(Hash)
-        value = value.utc.strftime("%Y-%m-%dT%H:%M:%S.%6NZ") if value.respond_to?(:strftime) && value.respond_to?(:utc)
-        "#{f}=#{value}"
-      }.join("|")
+    # `attrs` may carry "created_at" / :created_at, which picks the algorithm
+    # as for a stored row; without it, the algorithm a write now would use.
+    def self.compute_checksum_value(attrs, previous_checksum: nil, version: nil)
+      version ||= StandardAudit::Checksum.algorithm_for(attrs["created_at"] || attrs[:created_at])
 
-      canonical = "#{previous_checksum}|#{canonical}" if previous_checksum.present?
-
-      OpenSSL::Digest::SHA256.hexdigest(canonical)
+      StandardAudit::Checksum.digest(
+        attrs,
+        fields: CHECKSUM_FIELDS,
+        previous_checksum: previous_checksum,
+        version: version
+      )
     end
 
     # Runs the configured `before_checksum` hooks against a row that will be
@@ -240,10 +244,65 @@ module StandardAudit
       column_names.include?("previous_checksum")
     end
 
-    # Verifies the integrity of the audit log. Returns a result hash with
-    # :valid (boolean), :verified (count), :recovered (count), :redacted
-    # (count) and :failures (array of hashes carrying :id, :event_type,
-    # :created_at, :expected, :actual and :reason).
+    # Verifies the integrity of the audit log. Returns a result hash:
+    #
+    #   valid:               true when :failures is empty (see "Legacy rows")
+    #   verified:            rows whose digest was checked (every checksummed,
+    #                        non-anonymized row)
+    #   recovered:           rows verified against a searched-for parent
+    #   reordered:           legacy rows verified by reconstructing the
+    #                        metadata key order they were signed with
+    #   redacted:            anonymized rows (not digest-checked)
+    #   legacy_unverifiable: count of :unverifiable
+    #   unverifiable:        legacy rows whose digest can't be reproduced
+    #                        because the key order they were signed with is
+    #                        lost — same shape as a failure, reason
+    #                        :legacy_key_order_unverifiable
+    #   failures:            hashes with :id, :event_type, :created_at,
+    #                        :expected, :actual and :reason
+    #
+    # == Checksum algorithms and the cutover
+    #
+    # A row created at or after `config.canonical_checksum_since` (default
+    # StandardAudit::CANONICAL_CHECKSUM_CUTOVER) is signed with the canonical
+    # digest, which does not depend on how the database orders JSON object
+    # keys, and is verified STRICTLY with it: a mismatch is :digest_mismatch,
+    # never a legacy classification. An earlier row is legacy: its digest
+    # hashed `metadata.to_json` in Ruby insertion order, which `jsonb`
+    # discards (fundbright/delivery-ops#689). See StandardAudit::Checksum.
+    # The decision is recomputed from each row's stored `created_at`, the
+    # same value the writer used.
+    #
+    # == Legacy rows
+    #
+    # A legacy row is checked with the legacy digest, exactly as before —
+    # declared parent, else the preceding row, else the recovery search
+    # below. One that still does not reproduce is, in this order:
+    #
+    #   1. searched for the metadata key order it was signed with. A key order
+    #      that reproduces the stored digest is a witness, like the parent
+    #      search; the row counts in :reordered and is valid. Bounded by
+    #      `key_order_search_limit` orderings per row
+    #      (Checksum::KeyOrderSearch), against the declared parent or else the
+    #      preceding row and "no parent";
+    #   2. reported `:digest_mismatch` when that search was EXHAUSTIVE against
+    #      the parent the row declares (no key order explains it), or when the
+    #      row has no JSON object with more than one key (key order cannot be
+    #      why it fails);
+    #   3. reported `:missing_parent` when its declared parent is absent;
+    #   4. otherwise listed in :unverifiable with reason
+    #      `:legacy_key_order_unverifiable`.
+    #
+    # `:legacy_key_order_unverifiable` means "cannot be proven either way":
+    # an edited legacy row looks exactly like one whose key order was lost.
+    # Such rows do NOT make `valid` false on their own — the gem cannot tell,
+    # and the policy for them belongs to the host — but they are never
+    # silent: they are counted in :legacy_unverifiable and listed in
+    # :unverifiable. Pass `fail_on_legacy_unverifiable: true` to report them
+    # as failures instead. After the cutover no new legacy row can be
+    # written, so under honest operation :legacy_unverifiable never grows;
+    # alert if it does (an edited pre-cutover row, or a `created_at` moved
+    # back across the cutover).
     #
     # A row stamped `anonymized_at` (GDPR erasure via `anonymize_actor!`) is
     # counted in :redacted instead of being digest-checked: its checksummed
@@ -273,7 +332,12 @@ module StandardAudit
     #     actually reproduces this row's checksum. That recovers the true parent
     #     of a forked row without re-signing anything. It does not weaken tamper
     #     detection: a row whose fields were altered reproduces no candidate's
-    #     digest, so it still fails.
+    #     digest, so it still fails. (The key-order search is not combined with
+    #     this window search, so a legacy row that was both forked and
+    #     reordered stays unverifiable.)
+    #
+    # The chain links across the cutover like anywhere else: the first
+    # canonical row's parent is the last legacy row's stored checksum.
     #
     # A row whose parent digest is absent from the log is reported with
     # `reason: :missing_parent` — a row was removed. Two exemptions:
@@ -291,19 +355,45 @@ module StandardAudit
     # `created_at`. Rows whose two timestamps disagree (a backdated
     # `occurred_at`) can leave a hole rather than a prefix, and a hole is
     # reported — truthfully, since rows really are missing.
-    def self.verify_chain(scope: nil, batch_size: 1000, recovery_window: 256, strict: false)
+    def self.verify_chain(scope: nil, batch_size: 1000, recovery_window: 256, strict: false,
+      key_order_search_limit: StandardAudit::Checksum::KeyOrderSearch::DEFAULT_LIMIT,
+      fail_on_legacy_unverifiable: false)
       relation = scope ? where(scope_gid: scope.to_global_id.to_s) : all
       check_parents = scope.nil?
       declared_parents = chain_parent_column?
+      key_orders = StandardAudit::Checksum::KeyOrderSearch.new(limit: key_order_search_limit)
 
       previous_checksum = nil
       verified = 0
       recovered = 0
+      reordered = 0
       redacted = 0
+      unverifiable = []
       failures = []
       window = []
       first_row = true
       pruned_parents = []
+
+      # Records a :missing_parent failure when `declared` is absent from the
+      # log, unless the walk opened on it (a pruned start). True when reported.
+      report_missing_parent = lambda do |record, declared, expected|
+        next false unless declared.present? && check_parents && !parent_present?(declared, window, relation)
+
+        if first_row
+          # The walk opens on a row whose parent is already gone, so the log
+          # has had its start removed — retention pruning, typically. That
+          # parent is unknowable, and it can have several children (which is
+          # what a concurrent append leaves behind), so the exemption is
+          # remembered per digest rather than for one row.
+          pruned_parents << declared
+          false
+        elsif pruned_parents.include?(declared)
+          false
+        else
+          failures << chain_failure(record, expected: expected, reason: :missing_parent)
+          true
+        end
+      end
 
       each_in_chain_order(relation, batch_size: batch_size) do |record|
         if record.checksum.blank?
@@ -317,39 +407,37 @@ module StandardAudit
         if record.anonymized?
           redacted += 1
           # The digest cannot be checked, but the parent it declares can.
-          if declared.present? && check_parents && !parent_present?(declared, window, relation)
-            if first_row
-              pruned_parents << declared
-            elsif !pruned_parents.include?(declared)
-              failures << chain_failure(record, expected: nil, reason: :missing_parent)
-            end
-          end
-        elsif declared.present?
-          verified += 1
-          expected = record.compute_checksum_value(previous_checksum: declared)
-
-          if record.checksum != expected
-            failures << chain_failure(record, expected: expected, reason: :digest_mismatch)
-          elsif check_parents && !parent_present?(declared, window, relation)
-            if first_row
-              # The walk opens on a row whose parent is already gone, so the
-              # log has had its start removed — retention pruning, typically.
-              # That parent is unknowable, and it can have several children
-              # (which is what a concurrent append leaves behind), so the
-              # exemption is remembered per digest rather than for one row.
-              pruned_parents << declared
-            elsif !pruned_parents.include?(declared)
-              failures << chain_failure(record, expected: expected, reason: :missing_parent)
-            end
-          end
+          report_missing_parent.call(record, declared, nil)
         else
           verified += 1
-          expected = record.compute_checksum_value(previous_checksum: previous_checksum)
+          algorithm = StandardAudit::Checksum.algorithm_for(record.created_at)
+          parent = declared.presence || previous_checksum
+          expected = walk_digester(record, algorithm).call(parent)
 
           if record.checksum == expected
-            # Links to the row before it, as a linear chain does.
-          elsif !strict && recover_parent(record, window)
+            # Links to its declared parent, or to the row before it as a
+            # linear chain does.
+            report_missing_parent.call(record, declared, expected)
+          elsif declared.blank? && !strict && recover_parent(record, window, algorithm)
             recovered += 1
+          elsif algorithm == StandardAudit::Checksum::LEGACY && legacy_key_order_ambiguous?(record)
+            attrs = record.attributes.slice(*CHECKSUM_FIELDS)
+            parents = declared.present? || strict ? [parent] : [parent, nil].uniq
+
+            if key_orders.search(attrs, fields: CHECKSUM_FIELDS, checksum: record.checksum, parents: parents)
+              reordered += 1
+              report_missing_parent.call(record, declared, expected)
+            elsif declared.present? && key_orders.exhaustive?(attrs, fields: CHECKSUM_FIELDS)
+              # Every key order was tried against the parent the row itself
+              # declares, so key order does not explain this row.
+              failures << chain_failure(record, expected: expected, reason: :digest_mismatch)
+            elsif report_missing_parent.call(record, declared, expected)
+              # Reported as a removed row, which is the stronger finding.
+            else
+              entry = chain_failure(record, expected: expected, reason: :legacy_key_order_unverifiable)
+              unverifiable << entry
+              failures << entry if fail_on_legacy_unverifiable
+            end
           else
             failures << chain_failure(record, expected: expected, reason: :digest_mismatch)
           end
@@ -361,7 +449,16 @@ module StandardAudit
         window.shift if window.size > recovery_window
       end
 
-      { valid: failures.empty?, verified: verified, recovered: recovered, redacted: redacted, failures: failures }
+      {
+        valid: failures.empty?,
+        verified: verified,
+        recovered: recovered,
+        reordered: reordered,
+        redacted: redacted,
+        legacy_unverifiable: unverifiable.size,
+        unverifiable: unverifiable,
+        failures: failures
+      }
     end
 
     # Records, for every row that does not already carry one, the parent digest
@@ -426,27 +523,53 @@ module StandardAudit
     private_class_method :chain_failure
 
     # Searches `window` (most recent first, then "no parent at all") for the
-    # digest that reproduces the record's stored checksum. Returns a one-element
-    # array holding the parent — which may itself be nil, for a row written
-    # against an empty table — or nil when nothing reproduces the digest.
+    # digest that reproduces the record's stored checksum under `algorithm`.
+    # Returns a one-element array holding the parent — which may
+    # itself be nil, for a row written against an empty table — or nil when
+    # nothing reproduces the digest.
     #
     # SHA-256 preimage resistance is what makes this safe: a row whose fields
     # were altered reproduces no candidate's digest, so it is still reported.
-    def self.recover_parent(record, window)
+    def self.recover_parent(record, window, algorithm)
       window.reverse_each do |candidate|
-        return [candidate] if record.checksum == record.compute_checksum_value(previous_checksum: candidate)
+        return [candidate] if digest_matches?(record, candidate, algorithm)
       end
 
-      [nil] if record.checksum == record.compute_checksum_value(previous_checksum: nil)
+      [nil] if digest_matches?(record, nil, algorithm)
     end
     private_class_method :recover_parent
 
     def self.resolve_parent(record, previous_checksum, window)
-      return [previous_checksum] if record.checksum == record.compute_checksum_value(previous_checksum: previous_checksum)
+      algorithm = StandardAudit::Checksum.algorithm_for(record.created_at)
+      return [previous_checksum] if digest_matches?(record, previous_checksum, algorithm)
 
-      recover_parent(record, window)
+      recover_parent(record, window, algorithm)
     end
     private_class_method :resolve_parent
+
+    def self.digest_matches?(record, parent, algorithm)
+      record.checksum == walk_digester(record, algorithm).call(parent)
+    end
+    private_class_method :digest_matches?
+
+    # The row's `parent -> digest` function for `algorithm`, memoised on the
+    # loaded record: the parent searches try hundreds of parents per row, and
+    # this makes each try one SHA-256 instead of re-serialising the row. Only
+    # for records the walk loaded and never mutates.
+    def self.walk_digester(record, algorithm)
+      memo = record.instance_variable_get(:@walk_digesters) || record.instance_variable_set(:@walk_digesters, {})
+      memo[algorithm] ||= StandardAudit::Checksum.digester(
+        record.attributes.slice(*CHECKSUM_FIELDS), fields: CHECKSUM_FIELDS, version: algorithm
+      )
+    end
+    private_class_method :walk_digester
+
+    # True when the row's hashed JSON could have been reordered by the store:
+    # some object in it has more than one key.
+    def self.legacy_key_order_ambiguous?(record)
+      CHECKSUM_FIELDS.any? { |f| StandardAudit::Checksum.key_order_ambiguous?(record[f]) }
+    end
+    private_class_method :legacy_key_order_ambiguous?
 
     def self.parent_present?(digest, window, relation)
       window.include?(digest) || relation.exists?(checksum: digest)
@@ -465,10 +588,8 @@ module StandardAudit
           next
         end
 
-        new_checksum = compute_checksum_value(
-          record.attributes.slice(*CHECKSUM_FIELDS),
-          previous_checksum: previous_checksum
-        )
+        # The row's own created_at picks the algorithm, as verification will.
+        new_checksum = record.compute_checksum_value(previous_checksum: previous_checksum)
         columns = { checksum: new_checksum }
         columns[:previous_checksum] = previous_checksum if chain_parent_column?
         record.update_columns(columns)
@@ -550,7 +671,12 @@ module StandardAudit
     #
     # `previous_checksum` needs no protection of its own: it is an input to
     # this row's own digest, so editing it invalidates the row.
+    #
+    # The algorithm is chosen from `created_at`, which is fixed here (Active
+    # Record keeps a timestamp that is already set) so the decision is made
+    # from exactly the value that is stored and that verification re-reads.
     def compute_checksum
+      self.created_at ||= Time.current if has_attribute?(:created_at)
       previous = self.class.chain_tip_checksum
       self.previous_checksum = previous if self.class.chain_parent_column?
       self.checksum = compute_checksum_value(previous_checksum: previous)

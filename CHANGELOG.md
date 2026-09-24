@@ -7,10 +7,178 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-09-25
+
+Fixes the checksum so it survives PostgreSQL `jsonb`
+([fundbright/delivery-ops#689](https://github.com/fundbright/delivery-ops/issues/689)).
+Through 0.13.0, the row digest hashed `metadata.to_json` in the order the
+Ruby hash was built. `jsonb` stores keys in its own order (shortest first,
+then bytewise). So any row whose metadata had more than one key failed
+`verify_chain` with `digest_mismatch`, unless its keys happened to be
+written in that order. In fundbright production that is 17,448 of 25,910
+rows (67%). It, not concurrency, was the main cause behind
+fundbright/delivery-ops#433; the 0.8.0 recovery search rescues 24 of those
+rows. Every host on `jsonb` is affected: fundbright, sidekick, jumpdrive,
+luminality and nutripod. The gem's suite runs on SQLite, which keeps JSON as
+text in insertion order, so it never saw the bug.
+
+### ⚠️ Deploy before 2026-10-01T00:00:00Z
+
+The new checksum switches on **by the clock, not by deploy**. Rows whose
+`created_at` is at or after `StandardAudit::CANONICAL_CHECKSUM_CUTOVER`
+(**2026-10-01T00:00:00Z**) are signed with the canonical checksum and
+verified strictly with it. **Every process that writes audit rows must run
+0.13.1 before then.** A web worker or job runner still on an older gem after
+the cutover writes legacy-hashed rows with post-cutover timestamps. Those
+rows fail verification as `:digest_mismatch`, and the only honest fix
+afterwards is to explain them.
+
+If your rollout will slip, set `config.canonical_checksum_since` to a later
+time **before 2026-10-01**, in a `configure(baseline: true)` block. Never move
+it once the time has passed: verification recomputes the same decision from
+each row's stored `created_at`, so moving it re-judges rows under the other
+algorithm.
+
+### Upgrade steps
+
+1. Bump to 0.13.1 and deploy **before 2026-10-01T00:00:00Z** (or move
+   `config.canonical_checksum_since`, as described above). **No migration or
+   new column is needed.**
+2. Regenerate Sorbet RBIs where the app uses Tapioca. This release adds
+   `StandardAudit::Checksum` and new `verify_chain` keywords.
+3. After the cutover, run `verify_chain` (or `rake standard_audit:verify`)
+   and read the new counts; see "What `verify_chain` reports" below. Rows
+   created after the cutover should all verify. Record the
+   `legacy_unverifiable` count and alert if it ever grows.
+4. **Decide the policy for legacy rows that can't be reconstructed.** This
+   is a human decision (#689 options a to c). The gem reports these rows; it
+   does not make the call.
+
+**Requires Rails 8.1** (`activerecord`, `activejob`, `activesupport` `>= 8.1`,
+was `>= 8.0`). Every consumer app runs 8.1; 8.0 was never exercised in CI.
+
 ### Changed
 
-- **Requires Rails 8.1** (`activerecord`, `activejob`, `activesupport` `>= 8.1`,
-  was `>= 8.0`). Every consumer app runs 8.1; 8.0 was never exercised in CI.
+- **Canonical checksum for rows created at or after the cutover.** It is
+  the SHA-256 of canonical JSON
+  `{"fields": {…}, "previous_checksum": …, "v": 2}`:
+  - JSON values (metadata, or any Hash/Array field) are round-tripped exactly
+    as the column stores them.
+  - Object keys are sorted bytewise at every depth.
+  - Integral floats hash as integers, and times as UTC ISO 8601 with
+    microseconds.
+  - Strings are escaped at the byte level.
+  - nil is distinct from `""`.
+
+  Every input to the digest was audited. `CHECKSUM_FIELDS` is unchanged, and
+  `metadata` is the only JSON field in the shipped schema. The parent is
+  covered. The canonical form also closes a field-shifting ambiguity in the
+  legacy form, where `|` inside a value could move content between adjacent
+  fields with the same digest.
+- **Rows created before the cutover keep the legacy digest byte for byte**
+  (`StandardAudit::Checksum.legacy_digest`). They are written and verified
+  exactly as before.
+- The algorithm is chosen from `created_at` on every write path: `create`,
+  the batched `insert_all!` path, and `backfill_checksums!`. Verification and
+  `relink_checksums!` make the same choice. `created_at` is fixed before the
+  checksum is computed, so the writer and the verifier read the same stored
+  value. `created_at` is not itself hashed; see "Alert if it grows" below.
+- `compute_checksum_value` (instance and class) picks the algorithm from
+  `created_at`. `version:` forces one (`Checksum::LEGACY` / `CANONICAL`).
+- **`verify_chain` returns `reordered:`, `legacy_unverifiable:` and
+  `unverifiable:`**, and takes `key_order_search_limit:` (default 720) and
+  `fail_on_legacy_unverifiable:` (default false). Existing keys and reasons
+  are unchanged.
+- `rake standard_audit:verify` prints the cutover, the new counts and a tally
+  per reason. It takes `FAIL_ON_LEGACY_UNVERIFIABLE=1` and
+  `KEY_ORDER_SEARCH_LIMIT=<n>`.
+
+### What `verify_chain` reports
+
+**Rows created at or after the cutover** are checked with the canonical
+digest only, against the declared parent, else the preceding row, else the
+recovery search. A mismatch is `:digest_mismatch`. These rows are never
+classified as legacy. Chain linkage holds across the cutover: the first
+canonical row's parent is the last legacy row's checksum.
+
+**Rows created before the cutover** are first checked with the legacy digest
+exactly as in 0.13.0: stored order, against the declared parent, else the
+preceding row, else the recovery search. A row that still doesn't reproduce
+goes through these steps:
+
+1. **Key-order reconstruction.** The insertion order can't be read back,
+   because `jsonb`'s order depends only on the key set. It can be searched,
+   though: an ordering of the stored keys (at every depth) that reproduces the
+   digest the row has held since it was written is a witness, in the same
+   sense as the parent search. A row whose values were edited reproduces no
+   ordering.
+   - Such rows count in `reordered` and are valid.
+   - The search is bounded by `key_order_search_limit` orderings per row.
+   - Orders learned from earlier rows with the same keys are tried first, so
+     most rows cost one hash.
+   - Parents tried: the declared parent, or else the preceding row and "no
+     parent".
+2. **`:digest_mismatch`** if the search covered every ordering against the
+   parent the row declares, or if the row has no JSON object with more than
+   one key (key order can't be why it fails).
+3. **`:missing_parent`** if the declared parent is gone.
+4. Otherwise **`:legacy_key_order_unverifiable`**: the row has a multi-key
+   object and every other check passed. It is listed in `unverifiable` and
+   counted in `legacy_unverifiable`.
+
+**`valid` semantics.** `valid` is still `failures.empty?`. A
+`:legacy_key_order_unverifiable` row **does not make the chain invalid on its
+own**, because it means "cannot be proven either way": an edited legacy row
+looks exactly like one whose key order was lost. It is never silent. It is
+reported separately with a count, and `fail_on_legacy_unverifiable: true`
+turns these rows into failures.
+
+**Alert if it grows.** After the cutover, no new legacy row can be written,
+so under honest operation `legacy_unverifiable` never grows. Growth means a
+pre-cutover row was edited, or a row's `created_at` was moved back across
+the cutover.
+
+How many fundbright rows reconstruction rescues depends on their key counts
+and on whether they carry `previous_checksum`. That hasn't been measured on
+production data yet.
+
+### Added
+
+- `StandardAudit::CANONICAL_CHECKSUM_CUTOVER` (frozen,
+  `Time.utc(2026, 10, 1)`) and `config.canonical_checksum_since`, which
+  defaults to it.
+- `StandardAudit::Checksum` (`algorithm_for`, `digest`, `legacy_digest`,
+  `canonical_digest`, `canonical_json`) and
+  `StandardAudit::Checksum::KeyOrderSearch`.
+- **A PostgreSQL CI leg** (`test (postgres)`: `postgres:16-alpine`, `jsonb`
+  metadata) runs the full suite. The SQLite matrix stays. The dummy app uses
+  `DATABASE_URL` when it is set. New specs cover:
+  - both sides of the cutover, a row just before and just after it, the
+    config override, and the batch and backfill paths;
+  - linkage across the cutover;
+  - the `jsonb` regression. On Postgres the specs also assert that the stored
+    order really changed and that the legacy digest fails on it.
+
+### Not included: re-sealing legacy rows
+
+No tool re-signs legacy rows with the canonical digest. This is deliberate,
+and a follow-up if you want one. Re-sealing replaces an attestation made at
+write time with one made today. It needs an operator to attest to the rows
+first, and it has to keep the chain intact, because each row's successor
+hashed the row's *old* checksum as its parent. A safe version would need to:
+
+1. keep the original checksum (for example in a `legacy_checksum` column) so
+   the successor link can still be checked;
+2. record who re-sealed which rows and when (a `resealed_at` stamp plus an
+   audit event);
+3. re-seal only rows classified `:legacy_key_order_unverifiable`, never a
+   `:digest_mismatch`;
+4. have `verify_chain` report re-sealed rows separately, so a re-seal never
+   reads as original evidence.
+
+That is a schema change plus a policy decision, so it is left for a separate
+release. `backfill_checksums!` is still only for rows that never had a
+checksum; don't use it for this.
 
 ## [0.13.0] - 2026-09-24
 

@@ -1,3 +1,11 @@
+# SQLite in memory by default. Set DATABASE_URL (postgres://...) to run the
+# suite against PostgreSQL instead — CI runs both legs. The Postgres leg is
+# the only one that can see storage-side JSON behaviour: `jsonb` reorders
+# object keys, SQLite keeps them in insertion order.
 test:
+<% if ENV["DATABASE_URL"].to_s.start_with?("postgres") %>
+  url: <%= ENV["DATABASE_URL"] %>
+<% else %>
   adapter: sqlite3
   database: ":memory:"
+<% end %>

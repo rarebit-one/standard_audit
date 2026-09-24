@@ -12,7 +12,13 @@ class CreateAuditLogs < ActiveRecord::Migration[8.1]
       t.string :ip_address
       t.text :user_agent
       t.string :session_id
-      t.json :metadata, default: {}
+      # jsonb on Postgres, as the install template uses: it is the storage
+      # that reorders object keys, which is what checksum v2 has to survive.
+      if connection.adapter_name.match?(/postg/i)
+        t.jsonb :metadata, default: {}
+      else
+        t.json :metadata, default: {}
+      end
       t.datetime :occurred_at, null: false
       t.string :checksum
       t.timestamps

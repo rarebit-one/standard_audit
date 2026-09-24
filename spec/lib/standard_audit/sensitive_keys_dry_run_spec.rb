@@ -44,8 +44,9 @@ RSpec.describe StandardAudit::SensitiveKeysDryRun do
   it "reads keys in Ruby, so it works on the SQLite dummy (no jsonb_object_keys)" do
     # A guard against a future refactor reaching for a Postgres-only function:
     # the install template ships jsonb + GIN, but the gem must stay
-    # backend-neutral.
-    expect(StandardAudit::AuditLog.connection.adapter_name).to match(/sqlite/i)
+    # backend-neutral. Only meaningful on the SQLite leg; the Postgres CI leg
+    # has jsonb_object_keys, so it proves nothing there.
+    skip "SQLite-leg guard" unless StandardAudit::AuditLog.connection.adapter_name.match?(/sqlite/i)
 
     write("password" => "x")
 

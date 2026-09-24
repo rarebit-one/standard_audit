@@ -85,17 +85,34 @@ namespace :standard_audit do
 
   desc "Verify audit log chain integrity (tamper detection)"
   task verify: :environment do
-    result = StandardAudit::AuditLog.verify_chain
+    # FAIL_ON_LEGACY_UNVERIFIABLE=1 — treat pre-cutover rows whose metadata
+    # key order cannot be reconstructed as failures (see
+    # AuditLog.verify_chain). KEY_ORDER_SEARCH_LIMIT=5040 — orderings tried
+    # per legacy row.
+    options = {}
+    options[:fail_on_legacy_unverifiable] = true if %w[1 true].include?(ENV["FAIL_ON_LEGACY_UNVERIFIABLE"])
+    if (limit = ENV["KEY_ORDER_SEARCH_LIMIT"].presence)
+      options[:key_order_search_limit] = Integer(limit, 10)
+    end
+
+    result = StandardAudit::AuditLog.verify_chain(**options)
 
     puts "Audit Log Chain Verification"
     puts "============================="
+    puts "Canonical checksums since: #{StandardAudit.config.canonical_checksum_since.utc.iso8601}"
     puts "Records verified: #{result[:verified]}"
     puts "Chain valid: #{result[:valid]}"
     puts "Forked links recovered: #{result[:recovered]}"
+    puts "Legacy rows verified by key-order reconstruction: #{result[:reordered]}" if result[:reordered].to_i.positive?
     puts "Anonymized (redacted) records: #{result[:redacted]}" if result[:redacted].to_i.positive?
+    if result[:legacy_unverifiable].to_i.positive?
+      puts "Legacy rows unverifiable (metadata key order lost): #{result[:legacy_unverifiable]} " \
+           "— cannot be proven either way; this count must not grow after the cutover"
+    end
 
     if result[:failures].any?
       puts "\nUnverifiable records detected: #{result[:failures].size}"
+      result[:failures].map { |failure| failure[:reason] }.tally.each { |reason, n| puts "  #{reason}: #{n}" }
       result[:failures].each do |failure|
         puts "  #{failure[:id]} (#{failure[:event_type]}) at #{failure[:created_at]} — #{failure[:reason]}"
       end
