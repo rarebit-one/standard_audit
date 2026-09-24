@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-09-24
+
+The Phase 4 release. It removes what 0.12 deprecated, the empty engine
+routing, and the gaps the five app adoptions of 0.12 ran into.
+
+### Removed (breaking)
+
+- **`standard_audit:add_checksums` generator** (deprecated in 0.12.0). It was the 0.2 → 0.3 upgrade path. Every install since 0.3 creates `checksum`; hosts older than 0.8 run `standard_audit:add_previous_checksum`.
+- **`isolate_namespace StandardAudit` and the empty `config/routes.rb`.** The engine has no routes, controllers or views, and no host mounts it. `AuditLog` sets its own `table_name`, so table naming is unchanged. Side effects: `StandardAudit::Engine.routes` no longer holds an (empty) isolated route set, and `StandardAudit.table_name_prefix` / `railtie_namespace` are no longer set by isolation. The gem uses neither.
+
+### Added
+
+- **`config.error_reporter = ->(error, context) { … }`**, the destination for every error the gem swallows: `record(raise: false)`, subscriber writes, raising `before_checksum` hooks, and `audit!` write failures under the default policy. nil (the default) keeps `Rails.error.report(error, handled: true, context:)`, so nothing changes unless you set it. Apps that don't forward `Rails.error` to their tracker (jumpdrive-web, nutripod-web) can report straight to Sentry instead of wrapping calls in their own rescue. A raising reporter is logged and ignored. `audit_write_error_handler` still takes precedence for `audit!`.
+- **`entry[:via]` in `before_write`**: `:direct` (`record` without a block, `record_audit`, `audit!`), `:notification` (the ActiveSupport::Notifications subscriber, including `record` with a block), or `:rails_event`. A hook can now tell a direct write from a subscriber write. Not persisted. `StandardAudit::VIA` lists the values.
+- **`hooks:` option on the `"a standard_audit baseline"` shared example**: an Integer (exact `before_checksum` hook count) or an Array of Symbol hook names. The mutation example clears the hooks before the reset, so it fails when a hook lives outside the baseline block.
+
+### Fixed
+
+- **Upgrade generators number the migration after the host's newest migration.** `add_anonymized_at`, `add_previous_checksum` and `install` stamped `Time.now`, which sorts before future-dated host migrations. They now use the later of now and one second after the newest migration in the target directory (a real timestamp, unlike ActiveRecord's `+1`, which can produce `…235960`).
+- **README `before_write` example.** It showed a PII guard in `before_write` next to a masking `metadata_builder`. `before_write` runs after the builder, so the guard only ever saw masked values. The README now documents the order (resolvers → `metadata_builder` → `before_write` → dereference → redact → persist) and shows guard-then-mask inside `before_write`.
+
+### Upgrade notes (0.12.x → 0.13.0)
+
+Grepped `origin/main` of sidekick-web, jumpdrive-web (control-plane), fundbright-web, luminality-web and nutripod-web on 2026-09-24.
+
+**Required host changes: none.** No app runs `add_checksums`, mounts `StandardAudit::Engine`, or uses its route helpers. Regenerate Sorbet RBIs (`bin/tapioca gem standard_audit`, `bin/tapioca dsl`) where the app uses Tapioca.
+
+**Optional cleanups this release enables:**
+- sidekick-web `spec/initializers/standard_audit_baseline_spec.rb:49-53` ("still carries the two classification hooks after a reset"): replace with `hooks: 2` on the `it_behaves_like` call.
+- jumpdrive-web `control-plane/app/services/mcp/server.rb:98-104` (`audit_tool` rescue → `ErrorReporting.notify`): replace with `StandardAudit.record(..., raise: false)` plus a `config.error_reporter` that calls `ErrorReporting.notify`. Or keep it, since it also adds `component:` context.
+- nutripod-web `app/controllers/concerns/audit_auth_failure.rb:92-96`: the rescue reports through `Rails.error` itself, so it can become `record(..., raise: false)` with `config.audit_error_context_key = :audit_event`, like the other apps. Add a `config.error_reporter` if nutripod-web does not forward `Rails.error` to Sentry.
+- fundbright-web `AuditWritePolicy` (`before_write`) can use `entry[:via]` if its PII guard should skip gem-published subscriber payloads.
+- Any `before_write` that iterates every `entry` key now also sees `:via`.
+
 ## [0.12.1] - 2026-09-24
 
 ### Upgrade steps

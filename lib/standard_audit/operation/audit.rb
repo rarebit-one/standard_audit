@@ -282,13 +282,9 @@ module StandardAudit
           message = "[StandardAudit] Failed to record #{action}: #{error.class} #{error.message}"
           Rails.logger&.error(message) if defined?(Rails) && Rails.respond_to?(:logger)
 
-          return unless defined?(Rails) && Rails.respond_to?(:error) && Rails.error
-
-          Rails.error.report(
+          StandardAudit.report_error(
             error,
-            handled: true,
-            context: { StandardAudit.config.audit_error_context_key => action,
-                       operation: operation.class.name }
+            { StandardAudit.config.audit_error_context_key => action, operation: operation.class.name }
           )
         end
       end

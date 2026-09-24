@@ -18,12 +18,19 @@ require "standard_audit"
 #       catalogue: -> { AuditCatalogue::ACTIONS },
 #       sensitive_keys: %i[source_payload],
 #       sensitive_key_patterns: [/secret/i],
-#       present: %i[metadata_builder before_write current_scope_resolver]
+#       present: %i[metadata_builder before_write current_scope_resolver],
+#       hooks: 2   # or %i[backfill_scope classify_actor]
 #   end
 #
 # Every option is optional. Behaviour held in lambdas (resolvers, builders)
 # can't be compared by value, so list them under `present:` to assert they
 # survive a reset, and keep an app-specific example for what they return.
+#
+# `hooks:` covers `before_checksum` hooks, which live in a list rather than a
+# named setting. Pass an Integer to assert exactly that many are registered,
+# or an Array of the Symbol hook names (`config.before_checksum :name`) to
+# assert each is registered. The mutation example also clears the hooks
+# before the reset, so it fails if the baseline block doesn't re-add them.
 RSpec.shared_examples "a standard_audit baseline" do |options = {}|
   subscriptions          = Array(options[:subscriptions])
   settings               = options.fetch(:settings, {})
@@ -31,9 +38,14 @@ RSpec.shared_examples "a standard_audit baseline" do |options = {}|
   sensitive_keys         = Array(options[:sensitive_keys])
   sensitive_key_patterns = Array(options[:sensitive_key_patterns])
   present                = Array(options[:present])
+  hooks                  = options[:hooks]
+
+  unless hooks.nil? || hooks.is_a?(Integer) || (hooks.is_a?(Array) && hooks.all? { |h| h.is_a?(Symbol) || h.is_a?(String) })
+    raise ArgumentError, "hooks: must be an Integer (hook count) or an Array of Symbol hook names; got #{hooks.inspect}"
+  end
 
   def standard_audit_baseline_assertions(subscriptions:, settings:, catalogue:, sensitive_keys:,
-    sensitive_key_patterns:, present:)
+    sensitive_key_patterns:, present:, hooks:)
     config = StandardAudit.config
 
     expect(config.subscriptions).to include(*subscriptions) if subscriptions.any?
@@ -49,11 +61,22 @@ RSpec.shared_examples "a standard_audit baseline" do |options = {}|
     present.each do |name|
       expect(config.public_send(name)).not_to be_nil, "expected config.#{name} to survive a reset"
     end
+    case hooks
+    when Integer
+      expect(config.before_checksum_hooks.size).to eq(hooks),
+        "expected #{hooks} before_checksum hook(s) after a reset, found #{config.before_checksum_hooks.size}"
+    when Array
+      registered = config.before_checksum_hooks.select { |h| h.is_a?(Symbol) || h.is_a?(String) }.map(&:to_sym)
+      hooks.map(&:to_sym).each do |name|
+        expect(registered).to include(name), "expected before_checksum :#{name} to survive a reset"
+      end
+    end
   end
 
   let(:standard_audit_baseline_options) do
     { subscriptions: subscriptions, settings: settings, catalogue: catalogue,
-      sensitive_keys: sensitive_keys, sensitive_key_patterns: sensitive_key_patterns, present: present }
+      sensitive_keys: sensitive_keys, sensitive_key_patterns: sensitive_key_patterns, present: present,
+      hooks: hooks }
   end
 
   it "is registered with configure(baseline: true)" do
@@ -71,6 +94,7 @@ RSpec.shared_examples "a standard_audit baseline" do |options = {}|
     StandardAudit.config.subscribe_to "standard_audit.isolation_canary"
     settings.each_key { |name| StandardAudit.config.public_send(:"#{name}=", nil) }
     present.each { |name| StandardAudit.config.public_send(:"#{name}=", nil) }
+    StandardAudit.config.before_checksum_hooks = [] unless hooks.nil?
 
     StandardAudit.reset_configuration!
 

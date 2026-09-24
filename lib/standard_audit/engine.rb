@@ -1,7 +1,10 @@
 module StandardAudit
+  # A plain (non-isolated) engine: it contributes the AuditLog model, the two
+  # jobs and the subscriber wiring, and has no routes, controllers or views.
+  # 0.13.0 dropped `isolate_namespace` and the empty `config/routes.rb` it
+  # carried. Nothing depended on them: AuditLog sets its own `table_name`, and
+  # no host mounted the engine.
   class Engine < ::Rails::Engine
-    isolate_namespace StandardAudit
-
     initializer "standard_audit.subscriber" do
       ActiveSupport.on_load(:active_record) do
         StandardAudit.subscriber.setup!

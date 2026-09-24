@@ -102,8 +102,8 @@ When `actor` is omitted, it falls back to the configured `current_actor_resolver
 
 Where a missing audit row must never break the request — logging an
 authentication failure, say — pass `raise: false`. A failed write is logged,
-reported to `Rails.error` as handled (context
-`{ <audit_error_context_key> => event_type, source: "StandardAudit.record" }`),
+reported through `config.error_reporter` (default: `Rails.error`, as handled;
+context `{ <audit_error_context_key> => event_type, source: "StandardAudit.record" }`),
 and `record` returns nil:
 
 ```ruby
@@ -116,11 +116,30 @@ StandardAudit.record("auth.token_invalid",
 The default is `raise: true` (unchanged). In block form the option only
 governs the audit write; errors from your block always propagate.
 
-`raise: false` does not talk to Sentry (or any other tracker) itself. It calls
-`Rails.error.report`, so a swallowed failure reaches your error tracker only if
-something subscribes to `Rails.error`. `sentry-rails` registers that subscriber
-for you. With a hand-rolled Sentry setup, register one
-(`Rails.error.subscribe(...)`), or these failures show up only in the log.
+#### Where swallowed failures go: `config.error_reporter`
+
+By default the gem reports every error it swallows with
+`Rails.error.report(error, handled: true, context:)`. That covers a failed
+`record(raise: false)`, a failed subscriber write, a raising `before_checksum`
+hook, and a failed `audit!` write under the default policy. It reaches your
+error tracker only if something subscribes to `Rails.error`. `sentry-rails`
+registers that subscriber for you. If your app never forwards `Rails.error`
+(a hand-rolled Sentry setup), point the gem straight at the tracker (0.13.0+):
+
+```ruby
+config.error_reporter = ->(error, context) { Sentry.capture_exception(error, extra: context) }
+```
+
+It receives the error and the context Hash (keyed by
+`audit_error_context_key`) and **replaces** the `Rails.error` call. If you want
+both, call `Rails.error.report` from it too. A reporter that raises is logged
+and ignored, so it can never turn a swallowed audit failure into a raised one.
+`audit_write_error_handler`, when set, still takes precedence for `audit!`
+write failures.
+
+**Replace your host code with** `config.error_reporter`. It supersedes any
+rescue-and-report wrapper kept around `record(raise: false)` or `audit!` only
+because the app does not forward `Rails.error` to its tracker.
 
 **Replace your host code with** `raise: false`. It supersedes the
 `AuditAuthFailure#record_auth_failure` rescue-and-report wrapper
@@ -172,18 +191,40 @@ never ran on direct `record` calls.)
 ```ruby
 config.before_write = ->(entry) {
   # entry: { event_type:, actor:, target:, scope:, metadata:,
-  #          request_id:, ip_address:, user_agent:, session_id: }
-  AuditMetadataPii.verify!(entry[:metadata]) if StandardAudit::Operation::Audit.verify?
-  if (surface = Current.audit_surface).present?
-    entry[:metadata] = entry[:metadata].merge(surface: surface)
-  end
+  #          request_id:, ip_address:, user_agent:, session_id:, via: }
+  metadata = entry[:metadata]
+  AuditMetadataPii.verify!(metadata) if StandardAudit::Operation::Audit.verify? && entry[:via] == :direct
+  metadata = AuditMetadataPii.mask(metadata)
+  metadata = metadata.merge(surface: Current.audit_surface) if Current.audit_surface.present?
+  entry[:metadata] = metadata
 }
 ```
 
-It runs after the `Current` resolvers and `metadata_builder`, and **before**
-dereferencing and `sensitive_keys` redaction, so anything it injects is still
-filtered. Mutate `entry` in place; the return value is ignored. Raising aborts
-the write: direct callers see the error, the subscribers rescue and report it.
+**Order, per write:** `Current` resolvers → `metadata_builder` → `before_write`
+→ record dereferencing → `sensitive_keys` redaction → persist (or buffer, or
+enqueue). So:
+
+- `before_write` **sees the builder's output, not the raw metadata.** If your
+  `metadata_builder` masks or rewrites values, a guard in `before_write` checks
+  the masked values and can never fire. Keep the builder to idempotent
+  injection (like `engine_scope`), and do guard-then-mask in `before_write`, in
+  that order, as above. Before 0.13 this README showed a guard in
+  `before_write` next to a masking builder, which does not work.
+- Anything `before_write` injects is still dereferenced and redacted.
+
+Mutate `entry` in place; the return value is ignored. Raising aborts the write:
+direct callers see the error, the subscribers rescue and report it.
+
+**`entry[:via]`** (0.13.0+) names the entry point, so a hook can treat direct
+writes differently from subscriber writes. For example, it can apply a guard
+only to rows your own code writes and not to payloads a gem publishes. It is
+not persisted.
+
+| `entry[:via]` | Written by |
+|---|---|
+| `:direct` | `StandardAudit.record` (no block), `Auditable#record_audit`, `Operation#audit!` |
+| `:notification` | the ActiveSupport::Notifications subscriber (`subscribe_to` patterns), including `StandardAudit.record` **with a block** |
+| `:rails_event` | the `Rails.event` subscriber (Rails 8.1+) |
 
 **Hooks run once per row, batched writes included.** `before_write` and
 `before_checksum` run for every row inside `StandardAudit.batch` too (at flush
@@ -424,7 +465,8 @@ RSpec.describe "StandardAudit configuration baseline" do
     catalogue: -> { AuditCatalogue::ACTIONS },
     sensitive_keys: %i[source_payload],
     sensitive_key_patterns: [/secret/i],
-    present: %i[metadata_builder before_write current_scope_resolver]
+    present: %i[metadata_builder before_write current_scope_resolver],
+    hooks: 2 # before_checksum hooks: a count, or %i[backfill_scope] by name
 end
 ```
 
@@ -432,6 +474,13 @@ It checks the baseline is registered, that each value holds, and that it is
 restored after a mutation plus `reset_configuration!`. Behaviour held in
 lambdas can only be checked for presence; keep an app-specific example for
 anything whose *result* matters.
+
+`hooks:` (0.13.0+) covers `before_checksum` hooks, which a reset drops unless
+the baseline re-adds them. Pass an Integer to require exactly that many, or an
+Array of Symbol hook names (`config.before_checksum :name`) to require each one.
+The mutation example clears the hooks before the reset, so a hook registered
+outside the baseline block fails it. This replaces hand-written "still carries
+the N hooks after a reset" examples.
 
 **Replace your host code with** the shared example. It supersedes the bulk of
 each app's `spec/initializers/standard_audit_baseline_spec.rb` (or
@@ -527,8 +576,13 @@ StandardAudit.configure(baseline: true) do |config|
   config.current_scope_resolver = -> { Current.organisation }
 
   # -- before_write --
-  # Runs on every write path, before redaction. See "One write path".
+  # Runs on every write path, after metadata_builder and before redaction.
+  # entry[:via] is :direct, :notification or :rails_event. See "One write path".
   config.before_write = ->(entry) { entry[:metadata] = entry[:metadata].merge("surface" => Current.surface) }
+
+  # -- Error reporting --
+  # Where swallowed audit failures go. nil (default) = Rails.error.report.
+  # config.error_reporter = ->(error, context) { Sentry.capture_exception(error, extra: context) }
 
   # -- Async Processing --
   # Offload audit log creation to ActiveJob.
@@ -896,7 +950,12 @@ It is for rows that never had a checksum at all (pre-feature data).
 | `standard_audit:install` | `audit_logs` migration + initializer (new installs) |
 | `standard_audit:add_previous_checksum` | Adds `previous_checksum` (upgrading from < 0.8) |
 | `standard_audit:add_anonymized_at` | Adds `anonymized_at` (upgrading from < 0.12) |
-| `standard_audit:add_checksums` | **Deprecated** (0.12.0; to be removed). The 0.2 → 0.3 upgrade path; warns when run |
+
+The upgrade generators number their migration one second after the newest
+migration already in `db/migrate` when that is later than now (0.13.0+), so the
+new migration sorts after future-dated host migrations instead of before them.
+Before 0.13.0 they stamped the current time. (`standard_audit:add_checksums`,
+the 0.2 → 0.3 upgrade path, was removed in 0.13.0.)
 
 ## Rake Tasks
 

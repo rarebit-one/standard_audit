@@ -1,4 +1,5 @@
 require "rails/generators"
+require "generators/standard_audit/migration_number"
 
 module StandardAudit
   module Generators
@@ -11,7 +12,7 @@ module StandardAudit
     # installed. Pass `--skip-*` flags to opt out of individual steps and
     # `--force` to overwrite an existing initializer.
     class InstallGenerator < Rails::Generators::Base
-      include Rails::Generators::Migration
+      include StandardAudit::Generators::MigrationNumber
       source_root File.expand_path("templates", __dir__)
 
       desc <<~DESC
@@ -31,10 +32,6 @@ module StandardAudit
         desc: "Do not write config/initializers/standard_audit.rb"
       class_option :force, type: :boolean, default: false,
         desc: "Overwrite config/initializers/standard_audit.rb if it already exists"
-
-      def self.next_migration_number(dirname)
-        Time.now.utc.strftime("%Y%m%d%H%M%S")
-      end
 
       def copy_migration
         if options[:skip_migration]

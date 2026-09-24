@@ -46,7 +46,8 @@ module StandardAudit
         target: config.target_extractor.call(payload),
         scope: config.scope_extractor.call(payload),
         metadata: payload.except(*EXCLUDED_PAYLOAD_KEYS),
-        context: payload.slice(:request_id, :ip_address, :user_agent, :session_id)
+        context: payload.slice(:request_id, :ip_address, :user_agent, :session_id),
+        via: :notification
       )
     rescue => e
       StandardAudit.report_write_error(e, event.name, subscriber: self.class.name)
