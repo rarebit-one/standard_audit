@@ -45,7 +45,13 @@ RSpec.describe StandardAudit::Configuration do
 
     it "has default scope_extractor" do
       expect(config.scope_extractor).to be_a(Proc)
-      expect(config.scope_extractor.call({ scope: :test })).to eq(:test)
+      record = Struct.new(:id) { def to_global_id = "gid://dummy/Record/#{id}" }.new(1)
+      expect(config.scope_extractor.call({ scope: record })).to eq(record)
+    end
+
+    it "ignores a payload scope that is not a record" do
+      expect(config.scope_extractor.call({ scope: :password })).to be_nil
+      expect(config.scope_extractor.call({ scope: "openid profile" })).to be_nil
     end
   end
 

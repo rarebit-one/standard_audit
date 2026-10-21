@@ -139,6 +139,15 @@ RSpec.describe "StandardAudit single write path" do
       expect_uniform_row("write_path.payload_scope", scope: explicit_scope)
     end
 
+    # FUNDBRIGHT-WEB-41: standard_id publishes `scope:` as a Symbol (the OAuth
+    # scope or auth plane), which the default extractor used to hand to
+    # `to_global_id`, so every such event failed to write.
+    it "falls back to the resolver when the payload scope is not a record" do
+      ActiveSupport::Notifications.instrument("write_path.symbol_scope", actor: user, scope: :password)
+
+      expect_uniform_row("write_path.symbol_scope")
+    end
+
     it "leaves the row unscoped when unset and nothing is given" do
       StandardAudit.config.current_scope_resolver = nil
       StandardAudit.record("write_path.unscoped")
