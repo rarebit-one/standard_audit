@@ -24,7 +24,15 @@ module StandardAudit
 
       @actor_extractor = ->(payload) { payload[:actor] }
       @target_extractor = ->(payload) { payload[:target] }
-      @scope_extractor = ->(payload) { payload[:scope] }
+      # Only a record can be a scope (it is stored by GlobalID). Payloads also
+      # use `scope:` for other things: standard_id publishes the OAuth scope
+      # or auth plane there as a Symbol/String, which would raise NoMethodError
+      # on `to_global_id` at write time. Anything else falls through to
+      # `current_scope_resolver`.
+      @scope_extractor = ->(payload) {
+        scope = payload[:scope]
+        scope if scope.respond_to?(:to_global_id)
+      }
 
       # Tries StandardId's `Current.account` first, then the Rails-generator
       # convention `Current.user`. Each is respond_to?-guarded, so an app that

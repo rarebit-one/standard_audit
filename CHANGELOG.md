@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.3] - 2026-10-21
+
+### Fixed
+
+- The default `scope_extractor` returns the payload's `scope:` only when it is a
+  record (responds to `to_global_id`). standard_id publishes `scope:` as a
+  Symbol or String (the OAuth scope or auth plane), and the old default passed it
+  to `to_global_id`, so those events failed to write (`NoMethodError`,
+  fundbright-web FUNDBRIGHT-WEB-41). A non-record scope now falls through to
+  `current_scope_resolver`, like an absent one. A custom `scope_extractor` and an
+  explicit `scope:` on `StandardAudit.record` are unchanged.
+
 ## [0.13.2] - 2026-10-02
 
 ### Fixed
