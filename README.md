@@ -508,7 +508,13 @@ StandardAudit.configure(baseline: true) do |config|
   # Defaults shown below.
   config.actor_extractor  = ->(payload) { payload[:actor] }
   config.target_extractor = ->(payload) { payload[:target] }
-  config.scope_extractor  = ->(payload) { payload[:scope] } # default keeps it only if it responds to to_global_id
+  # Only a record can be a scope; the default drops anything else (e.g. the
+  # Symbol standard_id publishes as `scope:`) so it falls back to
+  # `current_scope_resolver`. Keep that guard in a custom extractor.
+  config.scope_extractor  = ->(payload) {
+    scope = payload[:scope]
+    scope if scope.respond_to?(:to_global_id)
+  }
 
   # -- Current Attribute Resolvers --
   # Fallbacks used when payload values are nil.

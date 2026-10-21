@@ -19,7 +19,10 @@ StandardAudit.configure(baseline: true) do |config|
   # config.target_extractor = ->(payload) { payload[:target] }
 
   # Scope extractor from notification payload
-  # config.scope_extractor = ->(payload) { payload[:scope] }
+  # config.scope_extractor = ->(payload) {
+  #   scope = payload[:scope]
+  #   scope if scope.respond_to?(:to_global_id) # only a record can be a scope
+  # }
 
   # Multi-tenancy: include StandardAudit::AuditScope in your tenant model
   # to add a scoped_audit_logs association.

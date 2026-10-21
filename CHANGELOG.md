@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The README configuration reference and the install generator's commented
+  `scope_extractor` example show the record guard the 0.13.3 default has, so a
+  host copying them no longer reintroduces FUNDBRIGHT-WEB-41.
+
 ## [0.13.3] - 2026-10-21
 
 ### Fixed
