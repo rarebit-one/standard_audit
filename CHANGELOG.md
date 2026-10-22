@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-10-22
+
 ### Changed
 
 - **`Checks::Retention` fails closed on `APP_ENVIRONMENT`.** Only `staging`,
