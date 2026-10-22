@@ -12,17 +12,24 @@ RSpec.describe "sensitive key patterns and nested filtering" do
     StandardAudit::MetadataFilter.call(metadata)
   end
 
-  describe "defaults (0.6.0 behaviour preserved)" do
-    it "applies no patterns, no exceptions, and no nested filtering" do
+  describe "defaults" do
+    it "applies no patterns or exceptions, and filters nested metadata (0.14.0)" do
       expect(StandardAudit.config.sensitive_key_patterns).to eq([])
       expect(StandardAudit.config.sensitive_key_exceptions).to eq([])
-      expect(StandardAudit.config.filter_nested_metadata).to be(false)
+      expect(StandardAudit.config.filter_nested_metadata).to be(true)
     end
 
-    it "leaves nested metadata alone" do
-      metadata = { stripe: { client_secret: "sk_live_x" } }
+    it "redacts a default sensitive key nested under another key" do
+      metadata = { stripe: { password: "hunter2", amount: 100 } }
 
-      expect(filtered(metadata)).to eq(stripe: { client_secret: "sk_live_x" })
+      expect(filtered(metadata)).to eq(stripe: { amount: 100 })
+    end
+
+    it "leaves nested metadata alone once filter_nested_metadata is turned off" do
+      StandardAudit.config.filter_nested_metadata = false
+      metadata = { stripe: { password: "hunter2" } }
+
+      expect(filtered(metadata)).to eq(stripe: { password: "hunter2" })
     end
 
     it "does not strip keys that merely contain a default sensitive key" do

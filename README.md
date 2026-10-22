@@ -1155,7 +1155,7 @@ canonical-checksum cutover do not depend on key order; earlier rows may — see
 config.sensitive_keys += %i[medical_record_number]  # extend the built-in defaults
 config.sensitive_key_patterns = [/secret/i]         # catch a whole family
 config.sensitive_key_exceptions = %i[input_tokens]  # ...minus the real ones
-config.filter_nested_metadata = true                # redact nested Hashes too
+config.filter_nested_metadata = true                # the default since 0.14.0
 ```
 
 `sensitive_keys` matches **exactly** on the key name. There is deliberately no
@@ -1170,12 +1170,13 @@ bin/rails "standard_audit:sensitive_keys:dry_run[secret]"   # NESTED=1 to model 
 ```
 
 The dry run writes nothing. It reports per key what would be stripped, what
-would be kept, and nested matches that survive because
-`filter_nested_metadata` is off.
+would be kept, and nested matches that would survive if
+`filter_nested_metadata` were off.
 
-Nested metadata is **not** redacted unless `filter_nested_metadata` is enabled
-— `metadata: { stripe: { client_secret: ... } }` passes both write paths under
-exact matching by default.
+Nested metadata is redacted by default (`filter_nested_metadata`, true since
+0.14.0): `metadata: { stripe: { client_secret: ... } }` has `client_secret`
+stripped on both write paths. Before 0.14.0 the default was false and such
+values were written intact.
 
 ### Records in metadata
 

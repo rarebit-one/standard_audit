@@ -30,6 +30,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`config.filter_nested_metadata` now defaults to `true`.** Redaction
+  descends into nested Hashes (and Hashes inside Arrays) unless a host turns it
+  off, so `metadata: { stripe: { client_secret: … } }` is no longer written
+  intact by default. Every rarebit-one consumer already set it to true, so for
+  them nothing changes. A host that relied on the old default will have nested
+  sensitive keys redacted from now on; to keep the old behaviour, set
+  `config.filter_nested_metadata = false` after a dry run
+  (`rake "standard_audit:sensitive_keys:dry_run[...]" NESTED=1`).
+  `raise_on_audit_write_error` keeps its `false` default: three of the five
+  consumers report and swallow failed audit writes on purpose.
 - The README configuration reference and the install generator's commented
   `scope_extractor` example show the record guard the 0.13.3 default has, so a
   host copying them no longer reintroduces FUNDBRIGHT-WEB-41.
