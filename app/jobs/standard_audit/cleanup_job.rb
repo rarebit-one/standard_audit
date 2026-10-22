@@ -3,7 +3,8 @@ module StandardAudit
     queue_as { StandardAudit.config.queue_name }
 
     def perform
-      days = StandardAudit.config.retention_days
+      # nil and :indefinite both mean keep forever.
+      days = StandardAudit.config.retention_window_days
       return unless days
 
       cutoff = days.days.ago

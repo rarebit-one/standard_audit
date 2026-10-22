@@ -1,5 +1,8 @@
 module StandardAudit
   class Configuration
+    # `config.retention_days = :indefinite`: keep audit rows forever, on purpose.
+    INDEFINITE_RETENTION = :indefinite
+
     attr_accessor :async, :queue_name, :enabled,
                   :actor_extractor, :target_extractor, :scope_extractor,
                   :current_actor_resolver, :current_request_id_resolver,
@@ -235,22 +238,40 @@ module StandardAudit
       # code change. Unset/blank/non-positive => nil (infinite retention, the
       # compliance-safe default that never auto-deletes). A host app can still
       # override with `config.retention_days = N` in its initializer.
+      #
+      # `:indefinite` (or STANDARD_AUDIT_RETENTION_DAYS=indefinite) also keeps
+      # rows forever, but records that as a decision: the production retention
+      # advisory (StandardAudit::Checks::Retention) only warns on nil, which
+      # means nobody chose.
       @retention_days = self.class.retention_days_from_env
     end
 
     # Reads `::Current.<name>` when a top-level `Current` exists and responds
     # to it; nil otherwise. The building block of the default resolvers.
+    # The retention window as a positive Integer of days, or nil when rows are
+    # kept forever (`retention_days` nil or `:indefinite`). What cleanup reads.
+    def retention_window_days
+      retention_days.is_a?(Integer) && retention_days.positive? ? retention_days : nil
+    end
+
+    # True when the host chose to keep audit rows forever.
+    def retention_indefinite?
+      retention_days == INDEFINITE_RETENTION
+    end
+
     def self.current_attribute(name)
       return nil unless defined?(::Current) && ::Current.respond_to?(name)
 
       ::Current.public_send(name)
     end
 
-    # Parses STANDARD_AUDIT_RETENTION_DAYS into a positive Integer, or nil when
-    # unset/blank/zero/negative/non-numeric (=> infinite retention).
+    # Parses STANDARD_AUDIT_RETENTION_DAYS into a positive Integer, `:indefinite`
+    # for the literal "indefinite", or nil when unset/blank/zero/negative/
+    # non-numeric (=> infinite retention, undecided).
     def self.retention_days_from_env
       raw = ENV["STANDARD_AUDIT_RETENTION_DAYS"]
       return nil if raw.nil? || raw.strip.empty?
+      return INDEFINITE_RETENTION if raw.strip.casecmp?(INDEFINITE_RETENTION.to_s)
 
       days = Integer(raw, exception: false)
       days&.positive? ? days : nil

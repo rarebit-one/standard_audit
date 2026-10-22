@@ -1,6 +1,9 @@
 require "standard_audit/version"
 
 module StandardAudit
+  # Raised by `verify_baseline_configuration!` (see `configure`).
+  class BaselineConfigurationError < StandardError; end
+
   # From this instant (by each row's `created_at`) new rows get the canonical
   # checksum and are verified strictly with it; earlier rows are legacy. See
   # StandardAudit::Checksum and fundbright/delivery-ops#689. Every host must
@@ -60,9 +63,42 @@ module StandardAudit
     def configure(baseline: false, &block)
       return config unless block
 
-      @baseline_configuration = block if baseline
+      if baseline
+        @baseline_configuration = block
+      else
+        unbaselined_configure_sites << caller_locations(1, 1).first.to_s
+      end
       block.call(config)
       config
+    end
+
+    # Where a plain (non-baseline) `configure` block was applied, oldest first.
+    # `reset_configuration!` cannot replay these, so a plain block that runs at
+    # boot is lost after the rspec plugin's first per-example reset.
+    # `standard_audit/rspec` reads this when the suite starts (see
+    # `verify_baseline_configuration!`).
+    def unbaselined_configure_sites
+      @unbaselined_configure_sites ||= []
+    end
+
+    # Raises when configuration applied so far would not survive
+    # `reset_configuration!`: any plain `configure` block, whether or not a
+    # baseline exists too. `standard_audit/rspec` calls it from
+    # `before(:suite)`, after the app has booted and before the first reset, so
+    # the mistake fails the suite instead of quietly reverting to gem defaults
+    # (and dropping `before_checksum` hooks) from the second example on.
+    # Configuring inside an example is fine and isn't checked.
+    def verify_baseline_configuration!
+      sites = unbaselined_configure_sites
+      return true if sites.empty?
+
+      raise BaselineConfigurationError,
+        "StandardAudit.configure was called without `baseline: true` at:\n  " \
+        "#{sites.uniq.join("\n  ")}\n" \
+        "standard_audit/rspec resets the configuration before every example and " \
+        "replays only the `configure(baseline: true)` block, so these settings are " \
+        "lost after the first example. Move them into that one baseline block " \
+        "(config/initializers/standard_audit.rb)."
     end
 
     def config
@@ -222,6 +258,7 @@ module StandardAudit
     # specs and for a host that needs a genuinely pristine configuration.
     def clear_baseline_configuration!
       @baseline_configuration = nil
+      @unbaselined_configure_sites = nil
     end
 
     def baseline_configured?

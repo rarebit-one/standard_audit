@@ -33,15 +33,18 @@ module StandardAudit
           return { status: :ok, detail: "retention advisory only runs on production deployments" }
         end
 
-        days = StandardAudit.config.retention_days
+        config = StandardAudit.config
+        return { status: :ok, retention: "indefinite" } if config.retention_indefinite?
+
+        days = config.retention_window_days
         return { status: :ok, retention_days: days } if days
 
         {
           status: :warn,
           message: "audit_logs retention is unbounded on production. Set " \
                    "STANDARD_AUDIT_RETENTION_DAYS (or config.retention_days) and schedule " \
-                   "StandardAudit::CleanupJob, or treat indefinite retention as a deliberate " \
-                   "compliance decision."
+                   "StandardAudit::CleanupJob, or record indefinite retention as a deliberate " \
+                   "compliance decision with config.retention_days = :indefinite."
         }
       end
 

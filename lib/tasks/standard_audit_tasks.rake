@@ -10,6 +10,11 @@ module StandardAudit
     def resolve_days!(task_name, arg)
       raw = arg.presence || StandardAudit.config.retention_days
 
+      if raw == StandardAudit::Configuration::INDEFINITE_RETENTION
+        abort "standard_audit:#{task_name}: retention_days is :indefinite (keep forever). " \
+              "Pass days explicitly (rake \"standard_audit:#{task_name}[90]\") to run it anyway."
+      end
+
       if raw.nil?
         abort "standard_audit:#{task_name}: no retention window. Pass days " \
               "(rake \"standard_audit:#{task_name}[90]\") or set config.retention_days " \

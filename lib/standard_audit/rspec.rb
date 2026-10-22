@@ -42,7 +42,17 @@ require "standard_audit/rspec/baseline"
 #
 # Intentionally `before(:example)` rather than `after(:example)` so the
 # reset always runs even when a previous example aborted in an after hook.
+#
+# Before the first example, `before(:suite)` checks that no plain
+# `StandardAudit.configure` ran at boot (StandardAudit.verify_baseline_configuration!)
+# and raises StandardAudit::BaselineConfigurationError, naming the call
+# sites, if one did. Such a block is applied once and then silently dropped by
+# the first reset, which is exactly the failure described above.
 RSpec.configure do |config|
+  config.before(:suite) do
+    StandardAudit.verify_baseline_configuration!
+  end
+
   config.before(:example) do
     Thread.current[:standard_audit_batch] = nil
     StandardAudit.reset_configuration!

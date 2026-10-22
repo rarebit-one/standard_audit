@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`config.retention_days = :indefinite`** (or
+  `STANDARD_AUDIT_RETENTION_DAYS=indefinite`) records keeping audit rows
+  forever as a decision. Rows are kept exactly as with `nil`, but the production
+  advisory `StandardAudit::Checks::Retention` reports `ok` with
+  `retention: "indefinite"` instead of warning. Hosts that set a huge day count
+  to quiet the advisory (nutripod-web uses 36,500) should switch: a day count is
+  a window, and `CleanupJob` acts on it. `CleanupJob` does nothing for
+  `:indefinite`, and `standard_audit:cleanup`/`:archive` abort unless given days.
+  New readers: `Configuration#retention_window_days` and `#retention_indefinite?`.
+- **`standard_audit/rspec` fails loudly when configuration would be lost.**
+  A `before(:suite)` hook calls the new `StandardAudit.verify_baseline_configuration!`,
+  which raises `StandardAudit::BaselineConfigurationError`, naming each call
+  site, if any plain `StandardAudit.configure` (without `baseline: true`) ran
+  at boot. The per-example reset replays only the baseline block, so those
+  settings, `before_checksum` hooks included, disappeared from the second
+  example on, and the specs that would have noticed passed vacuously.
+  `configure` calls inside an example are unaffected. **Upgrading:** move any
+  boot-time plain `configure` into the single `configure(baseline: true)` block.
+
 ### Changed
 
 - The README configuration reference and the install generator's commented
