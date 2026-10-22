@@ -17,7 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to quiet the advisory (nutripod-web uses 36,500) should switch: a day count is
   a window, and `CleanupJob` acts on it. `CleanupJob` does nothing for
   `:indefinite`, and `standard_audit:cleanup`/`:archive` abort unless given days.
-  New readers: `Configuration#retention_window_days` and `#retention_indefinite?`.
+  New readers: `Configuration#retention_window_days`, `#retention_indefinite?`
+  and `#retention_misconfigured?`; `CleanupJob` warns and deletes nothing for a
+  value that is neither a positive Integer nor `:indefinite` (e.g. `"90"`).
 - **`standard_audit/rspec` fails loudly when configuration would be lost.**
   A `before(:suite)` hook calls the new `StandardAudit.verify_baseline_configuration!`,
   which raises `StandardAudit::BaselineConfigurationError`, naming each call
@@ -27,9 +29,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   example on, and the specs that would have noticed passed vacuously.
   `configure` calls inside an example are unaffected. **Upgrading:** move any
   boot-time plain `configure` into the single `configure(baseline: true)` block.
+- **`StandardAudit::AuthFailure`** records authentication failures: requests
+  refused before any operation runs. Include
+  `StandardAudit::AuthFailure::Controller` for a private
+  `record_auth_failure(event_type, error_code, actor: nil, **extra)`, or call
+  `StandardAudit::AuthFailure.record(..., request:/path:)` outside a controller.
+  It writes allow-listed metadata (`error_code`, `path`, `method`, plus the
+  caller's extras), the request id/IP/user agent as columns (user agent
+  truncated to 1024 characters), drops a non-GlobalID actor, and never raises.
+  `config.log_auth_failures = true` (default `false`) adds a structured warn
+  line. It replaces the hand-copied `AuditAuthFailure` concerns in
+  nutripod-web, luminality-web and sidekick-web.
+- **`"standard_audit catalogue coverage"`** shared example
+  (`require "standard_audit/rspec/coverage"`): every catalogue action must be
+  asserted by a positive literal `have_audited("…")` somewhere in the suite,
+  apart from an explicit `pending:` list that may only shrink. It is a static
+  scan of the spec files, so it behaves the same under `parallel_rspec` and in
+  partial runs. Predicates: `StandardAudit::RSpec::Coverage.covered_actions`
+  and `.report`. It replaces the hand-synced `CATALOGUE_ACTIONS` copies in the
+  apps' `spec/support/audit_log_coverage.rb`.
 
 ### Changed
 
+- **`config.filter_nested_metadata` now defaults to `true`.** Redaction
+  descends into nested Hashes (and Hashes inside Arrays) unless a host turns it
+  off, so `metadata: { stripe: { client_secret: … } }` is no longer written
+  intact by default. Every rarebit-one consumer already set it to true, so for
+  them nothing changes. A host that relied on the old default will have nested
+  sensitive keys redacted from now on; to keep the old behaviour, set
+  `config.filter_nested_metadata = false` after a dry run
+  (`rake "standard_audit:sensitive_keys:dry_run[...]" NESTED=1`).
+  `raise_on_audit_write_error` keeps its `false` default: three of the five
+  consumers report and swallow failed audit writes on purpose.
 - The README configuration reference and the install generator's commented
   `scope_extractor` example show the record guard the 0.13.3 default has, so a
   host copying them no longer reintroduces FUNDBRIGHT-WEB-41.

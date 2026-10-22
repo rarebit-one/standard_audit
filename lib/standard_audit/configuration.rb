@@ -10,7 +10,7 @@ module StandardAudit
                   :current_session_id_resolver, :current_scope_resolver,
                   :before_write,
                   :sensitive_keys, :sensitive_key_patterns,
-                  :sensitive_key_exceptions, :filter_nested_metadata,
+                  :sensitive_key_exceptions, :filter_nested_metadata, :log_auth_failures,
                   :dereference_record_metadata,
                   :metadata_builder, :before_checksum_hooks,
                   :anonymizable_metadata_keys, :retention_days,
@@ -108,18 +108,27 @@ module StandardAudit
       # `sensitive_key_exceptions = %i[input_tokens output_tokens]`.
       @sensitive_key_exceptions = []
 
-      # When true, redaction descends into nested Hashes (and Hashes inside
-      # Arrays), so `metadata: { stripe: { client_secret: … } }` is caught.
-      # Defaults to false: it changes what gets written, and audit rows are
-      # append-only. Reserved keys are never descended into.
-      @filter_nested_metadata = false
+      # When true (the default since 0.14.0), redaction descends into nested
+      # Hashes (and Hashes inside Arrays), so
+      # `metadata: { stripe: { client_secret: … } }` is caught. Reserved keys
+      # are never descended into. Before 0.14.0 it defaulted to false, which
+      # wrote nested secrets intact; every app in the estate had already
+      # turned it on. Set false only to keep pre-0.14.0 rows comparable, after
+      # a dry run (`rake standard_audit:sensitive_keys:dry_run`).
+      @filter_nested_metadata = true
+
+      # When true, StandardAudit::AuthFailure.record also emits one structured
+      # `Rails.logger.warn` line per failure (event, error_code, path, ip,
+      # actor, timestamp), for alerting off the log stream. The audit row is
+      # written either way.
+      @log_auth_failures = false
 
       # When true (the default), an ActiveRecord object appearing anywhere in
       # audit metadata is replaced by a reference —
       # `{ "gid" => …, "type" => …, "id" => … }` — instead of being serialised
       # with all of its attributes. See StandardAudit::RecordReference.
       #
-      # Defaults to the SAFE behaviour, unlike `filter_nested_metadata`,
+      # Defaults to the SAFE behaviour, like `filter_nested_metadata`,
       # because the values this catches are ones no host asked to record:
       # `password_digest`, `token_digest`, `lookup_hash` and PKCE verifiers
       # arriving as a side effect of a payload carrying `account:` or
@@ -246,8 +255,6 @@ module StandardAudit
       @retention_days = self.class.retention_days_from_env
     end
 
-    # Reads `::Current.<name>` when a top-level `Current` exists and responds
-    # to it; nil otherwise. The building block of the default resolvers.
     # The retention window as a positive Integer of days, or nil when rows are
     # kept forever (`retention_days` nil or `:indefinite`). What cleanup reads.
     def retention_window_days
@@ -259,6 +266,14 @@ module StandardAudit
       retention_days == INDEFINITE_RETENTION
     end
 
+    # True for a `retention_days` that is neither a window nor keep-forever,
+    # e.g. a String "90" or 0. CleanupJob keeps every row then, and says so.
+    def retention_misconfigured?
+      !retention_days.nil? && !retention_indefinite? && retention_window_days.nil?
+    end
+
+    # Reads `::Current.<name>` when a top-level `Current` exists and responds
+    # to it; nil otherwise. The building block of the default resolvers.
     def self.current_attribute(name)
       return nil unless defined?(::Current) && ::Current.respond_to?(name)
 

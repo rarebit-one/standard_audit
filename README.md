@@ -258,6 +258,43 @@ config.before_checksum { |log| log.actor_role = Current.audit_role_for(log.actor
   `metadata_builder` now applies to direct writes too, so no change is needed
   beyond deleting the caveat.
 
+## Authentication Failures
+
+A request refused before any operation runs (an invalid or revoked token, a
+missing scope, a locked account) never reaches the operation audit contract, so
+the controller records it. `StandardAudit::AuthFailure` is that recorder:
+
+```ruby
+class Api::BaseController < ActionController::API
+  include StandardAudit::AuthFailure::Controller
+
+  rescue_from InvalidToken do
+    record_auth_failure("auth.token_invalid", "AUTH_001")
+    render json: { error: "AUTH_001" }, status: :unauthorized
+  end
+end
+
+# Outside a controller, with or without a request:
+StandardAudit::AuthFailure.record("auth.social_denied", "AUTH_009", request: request)
+StandardAudit::AuthFailure.record("auth.social_denied", "AUTH_009", path: "/auth/callback", actor: account)
+```
+
+- **Metadata is an allow-list:** `error_code`, `path`, `method` (with a
+  request), plus exactly the extra keywords you pass. Nothing comes from params,
+  headers or the exception. The rejected credential is in scope on this path, so
+  never pass it; `sensitive_keys` is only the backstop.
+- **Request context goes in the columns:** with `request:`, the request id, IP
+  and user agent are written explicitly, and the user agent is truncated to
+  1024 characters so an over-long header can't cost you the row.
+- **The actor** is usually nil. A value that isn't GlobalID-able is dropped.
+- **It never raises** (`raise: false`), so an audit failure can't turn a 401
+  into a 500. Failures go to `config.error_reporter`.
+- **`config.log_auth_failures = true`** also emits one structured
+  `Rails.logger.warn` line per failure, for alerting off the log stream.
+
+These are not operation actions, so leave them out of an `orphans_within:
+:catalogue` check (or out of the catalogue).
+
 ## Model Concerns
 
 ### Auditable
@@ -487,6 +524,38 @@ each app's `spec/initializers/standard_audit_baseline_spec.rb` (or
 `spec/config/…`). The `Current.account` / `Current.session&.id` resolver
 examples can go too once those overrides are deleted (they are the 0.12.0
 defaults).
+
+### `"standard_audit catalogue coverage"`
+
+Checks that every catalogue action is asserted by a positive
+`have_audited("…")` somewhere in the suite:
+
+```ruby
+require "standard_audit/rspec/coverage"
+
+RSpec.describe "Audit catalogue coverage" do
+  it_behaves_like "standard_audit catalogue coverage",
+    catalogue: -> { AuditCatalogue::OPERATION_ACTIONS },  # default: config.audit_catalogue
+    pending: %w[grant.pass_scheduled]                     # catalogued, no writer yet
+end
+```
+
+It fails on a catalogue action with no assertion, a `pending:` action that
+isn't in the catalogue, and a `pending:` action that has gained an assertion
+(so the list only shrinks).
+
+It scans the spec files' text rather than tallying matches at runtime, so it
+gives the same answer under `parallel_rspec`, in a single-file run and in the
+full suite. Only literal, positive assertions count: `.to have_audited("x")`,
+`.to(have_audited("x"))` and `.and have_audited("x")`. `not_to`, and names
+built at runtime, don't. Their example still has to pass, so in a green suite an
+assertion means the row was written.
+
+**Replace your host code with** the shared example: the hand-copied
+`CATALOGUE_ACTIONS` / `PENDING_FEATURE_ACTIONS` in
+`spec/support/audit_log_coverage.rb`, the spec that kept them in sync with the
+catalogue, and the `change(…).by(1)` + `expect_well_formed_log` pairs, which
+`have_audited("x").by.on.once` replaces.
 
 ## Configuration Reference
 
@@ -1155,7 +1224,7 @@ canonical-checksum cutover do not depend on key order; earlier rows may — see
 config.sensitive_keys += %i[medical_record_number]  # extend the built-in defaults
 config.sensitive_key_patterns = [/secret/i]         # catch a whole family
 config.sensitive_key_exceptions = %i[input_tokens]  # ...minus the real ones
-config.filter_nested_metadata = true                # redact nested Hashes too
+config.filter_nested_metadata = true                # the default since 0.14.0
 ```
 
 `sensitive_keys` matches **exactly** on the key name. There is deliberately no
@@ -1170,12 +1239,13 @@ bin/rails "standard_audit:sensitive_keys:dry_run[secret]"   # NESTED=1 to model 
 ```
 
 The dry run writes nothing. It reports per key what would be stripped, what
-would be kept, and nested matches that survive because
-`filter_nested_metadata` is off.
+would be kept, and nested matches that would survive if
+`filter_nested_metadata` were off.
 
-Nested metadata is **not** redacted unless `filter_nested_metadata` is enabled
-— `metadata: { stripe: { client_secret: ... } }` passes both write paths under
-exact matching by default.
+Nested metadata is redacted by default (`filter_nested_metadata`, true since
+0.14.0): `metadata: { stripe: { client_secret: ... } }` has `client_secret`
+stripped on both write paths. Before 0.14.0 the default was false and such
+values were written intact.
 
 ### Records in metadata
 

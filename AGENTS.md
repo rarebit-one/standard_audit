@@ -13,8 +13,11 @@ checksum chain, and GDPR-friendly anonymize / export helpers.
   the checksum chain, `preload_references`, and the GDPR helpers.
 - `lib/standard_audit/operation.rb`: the operation audit DSL
   (`audits` / `audit_none!` / `audit!`); predicates in `lib/standard_audit/operation/audit.rb`.
-- `lib/standard_audit/rspec.rb` and `lib/standard_audit/rspec/operation.rb`: the
-  host-facing RSpec plugin and shared examples.
+- `lib/standard_audit/auth_failure.rb`: `StandardAudit::AuthFailure` (`.record`
+  and the `::Controller` concern) for pre-operation authentication failures.
+- `lib/standard_audit/rspec.rb`, `lib/standard_audit/rspec/operation.rb` and
+  `lib/standard_audit/rspec/coverage.rb`: the host-facing RSpec plugin and
+  shared examples.
 - `lib/generators/standard_audit/install/`: `rails g standard_audit:install`.
 
 ## Commands
@@ -67,7 +70,8 @@ The helper DROPS and recreates the `public` schema of that database on boot
 
 ## Footguns
 
-- Nested metadata is unfiltered unless `config.filter_nested_metadata` is true.
+- Nested metadata is filtered by default (since 0.14.0). A host that sets
+  `config.filter_nested_metadata = false` writes nested secrets intact.
 - The default `:authorization` sensitive key also strips policy-decision keys;
   rename them (e.g. `:authorization_policy`).
 - Dry-run any redaction rule against real rows first:

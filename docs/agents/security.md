@@ -30,10 +30,10 @@ Moved verbatim from `AGENTS.md` in the P3 trim, except the last bullet, which wa
   content is simply never written from then on. `sensitive_key_patterns` is the
   supported tool: `/secret/i` solves the motivating `client_secret` case, and
   it is opt-in per app.
-- **Nested metadata is unfiltered unless `config.filter_nested_metadata` is
-  true.** By default `metadata: { stripe: { client_secret: … } }` is written
-  intact on *both* write paths, even under exact matching. Turning it on
-  descends into nested Hashes and Hashes inside Arrays. Reserved keys are
+- **Nested metadata is filtered by default** (`config.filter_nested_metadata`,
+  true since 0.14.0; it was false before, which wrote
+  `metadata: { stripe: { client_secret: … } }` intact on *both* write paths).
+  It descends into nested Hashes and Hashes inside Arrays. Reserved keys are
   preserved *and their subtree is never descended into, at any depth* —
   `_tags` / `_source` are gem-owned, not host payload.
 - Before enabling any rule, run it against real rows:

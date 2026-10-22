@@ -126,6 +126,16 @@ RSpec.describe "StandardAudit.configure(baseline:)" do
         .to raise_error(StandardAudit::BaselineConfigurationError)
     end
 
+    it "records each call site once, and at most UNBASELINED_SITE_LIMIT of them" do
+      3.times { StandardAudit.configure { |c| c.queue_name = :audit } }
+      expect(StandardAudit.unbaselined_configure_sites.size).to eq(1)
+
+      StandardAudit::UNBASELINED_SITE_LIMIT.times do |i|
+        eval("StandardAudit.configure { |c| c.queue_name = :audit }", binding, "site_#{i}.rb", 1) # rubocop:disable Security/Eval
+      end
+      expect(StandardAudit.unbaselined_configure_sites.size).to eq(StandardAudit::UNBASELINED_SITE_LIMIT)
+    end
+
     it "is cleared by clear_baseline_configuration!" do
       StandardAudit.configure { |c| c.queue_name = :audit }
       StandardAudit.clear_baseline_configuration!

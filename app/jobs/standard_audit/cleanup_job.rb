@@ -3,8 +3,15 @@ module StandardAudit
     queue_as { StandardAudit.config.queue_name }
 
     def perform
+      config = StandardAudit.config
+      if config.retention_misconfigured?
+        Rails.logger.warn("[StandardAudit] CleanupJob skipped: retention_days is #{config.retention_days.inspect}, " \
+                          "not a positive Integer or :indefinite, so no audit logs were deleted")
+        return
+      end
+
       # nil and :indefinite both mean keep forever.
-      days = StandardAudit.config.retention_window_days
+      days = config.retention_window_days
       return unless days
 
       cutoff = days.days.ago
