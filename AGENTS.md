@@ -15,8 +15,9 @@ checksum chain, and GDPR-friendly anonymize / export helpers.
   (`audits` / `audit_none!` / `audit!`); predicates in `lib/standard_audit/operation/audit.rb`.
 - `lib/standard_audit/auth_failure.rb`: `StandardAudit::AuthFailure` (`.record`
   and the `::Controller` concern) for pre-operation authentication failures.
-- `lib/standard_audit/rspec.rb` and `lib/standard_audit/rspec/operation.rb`: the
-  host-facing RSpec plugin and shared examples.
+- `lib/standard_audit/rspec.rb`, `lib/standard_audit/rspec/operation.rb` and
+  `lib/standard_audit/rspec/coverage.rb`: the host-facing RSpec plugin and
+  shared examples.
 - `lib/generators/standard_audit/install/`: `rails g standard_audit:install`.
 
 ## Commands

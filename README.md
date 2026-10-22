@@ -525,6 +525,38 @@ each app's `spec/initializers/standard_audit_baseline_spec.rb` (or
 examples can go too once those overrides are deleted (they are the 0.12.0
 defaults).
 
+### `"standard_audit catalogue coverage"`
+
+Checks that every catalogue action is asserted by a positive
+`have_audited("…")` somewhere in the suite:
+
+```ruby
+require "standard_audit/rspec/coverage"
+
+RSpec.describe "Audit catalogue coverage" do
+  it_behaves_like "standard_audit catalogue coverage",
+    catalogue: -> { AuditCatalogue::OPERATION_ACTIONS },  # default: config.audit_catalogue
+    pending: %w[grant.pass_scheduled]                     # catalogued, no writer yet
+end
+```
+
+It fails on a catalogue action with no assertion, a `pending:` action that
+isn't in the catalogue, and a `pending:` action that has gained an assertion
+(so the list only shrinks).
+
+It scans the spec files' text rather than tallying matches at runtime, so it
+gives the same answer under `parallel_rspec`, in a single-file run and in the
+full suite. Only literal, positive assertions count: `.to have_audited("x")`,
+`.to(have_audited("x"))` and `.and have_audited("x")`. `not_to`, and names
+built at runtime, don't. Their example still has to pass, so in a green suite an
+assertion means the row was written.
+
+**Replace your host code with** the shared example: the hand-copied
+`CATALOGUE_ACTIONS` / `PENDING_FEATURE_ACTIONS` in
+`spec/support/audit_log_coverage.rb`, the spec that kept them in sync with the
+catalogue, and the `change(…).by(1)` + `expect_well_formed_log` pairs, which
+`have_audited("x").by.on.once` replaces.
+
 ## Configuration Reference
 
 Use `configure(baseline: true)` in your initializer. It remembers the block so
