@@ -255,8 +255,6 @@ module StandardAudit
       @retention_days = self.class.retention_days_from_env
     end
 
-    # Reads `::Current.<name>` when a top-level `Current` exists and responds
-    # to it; nil otherwise. The building block of the default resolvers.
     # The retention window as a positive Integer of days, or nil when rows are
     # kept forever (`retention_days` nil or `:indefinite`). What cleanup reads.
     def retention_window_days
@@ -268,6 +266,14 @@ module StandardAudit
       retention_days == INDEFINITE_RETENTION
     end
 
+    # True for a `retention_days` that is neither a window nor keep-forever,
+    # e.g. a String "90" or 0. CleanupJob keeps every row then, and says so.
+    def retention_misconfigured?
+      !retention_days.nil? && !retention_indefinite? && retention_window_days.nil?
+    end
+
+    # Reads `::Current.<name>` when a top-level `Current` exists and responds
+    # to it; nil otherwise. The building block of the default resolvers.
     def self.current_attribute(name)
       return nil unless defined?(::Current) && ::Current.respond_to?(name)
 

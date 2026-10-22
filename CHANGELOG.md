@@ -17,7 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to quiet the advisory (nutripod-web uses 36,500) should switch: a day count is
   a window, and `CleanupJob` acts on it. `CleanupJob` does nothing for
   `:indefinite`, and `standard_audit:cleanup`/`:archive` abort unless given days.
-  New readers: `Configuration#retention_window_days` and `#retention_indefinite?`.
+  New readers: `Configuration#retention_window_days`, `#retention_indefinite?`
+  and `#retention_misconfigured?`; `CleanupJob` warns and deletes nothing for a
+  value that is neither a positive Integer nor `:indefinite` (e.g. `"90"`).
 - **`standard_audit/rspec` fails loudly when configuration would be lost.**
   A `before(:suite)` hook calls the new `StandardAudit.verify_baseline_configuration!`,
   which raises `StandardAudit::BaselineConfigurationError`, naming each call

@@ -4,6 +4,9 @@ module StandardAudit
   # Raised by `verify_baseline_configuration!` (see `configure`).
   class BaselineConfigurationError < StandardError; end
 
+  # How many distinct plain `configure` call sites are remembered.
+  UNBASELINED_SITE_LIMIT = 20
+
   # From this instant (by each row's `created_at`) new rows get the canonical
   # checksum and are verified strictly with it; earlier rows are legacy. See
   # StandardAudit::Checksum and fundbright/delivery-ops#689. Every host must
@@ -67,13 +70,18 @@ module StandardAudit
       if baseline
         @baseline_configuration = block
       else
-        unbaselined_configure_sites << caller_locations(1, 1).first.to_s
+        site = caller_locations(1, 1).first.to_s
+        # Bounded: only boot-time calls matter, but a suite that configures
+        # inside thousands of examples would otherwise grow this forever.
+        sites = unbaselined_configure_sites
+        sites << site unless sites.include?(site) || sites.size >= UNBASELINED_SITE_LIMIT
       end
       block.call(config)
       config
     end
 
-    # Where a plain (non-baseline) `configure` block was applied, oldest first.
+    # Where a plain (non-baseline) `configure` block was applied, oldest first,
+    # each site once, at most UNBASELINED_SITE_LIMIT of them.
     # `reset_configuration!` cannot replay these, so a plain block that runs at
     # boot is lost after the rspec plugin's first per-example reset.
     # `standard_audit/rspec` reads this when the suite starts (see

@@ -49,6 +49,17 @@ RSpec.describe StandardAudit::CleanupJob, type: :job do
       expect(StandardAudit::AuditLog.exists?(log.id)).to be true
     end
 
+    it "keeps every row and warns when retention_days is not a window" do
+      StandardAudit.configure { |c| c.retention_days = "90" }
+      allow(Rails.logger).to receive(:warn)
+      log = create_log(occurred_at: 1000.days.ago)
+
+      described_class.new.perform
+
+      expect(StandardAudit::AuditLog.exists?(log.id)).to be true
+      expect(Rails.logger).to have_received(:warn).with(/retention_days is "90"/)
+    end
+
     it "logs the number of deleted records" do
       StandardAudit.configure { |c| c.retention_days = 30 }
       create_log(occurred_at: 31.days.ago)
