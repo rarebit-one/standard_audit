@@ -258,6 +258,43 @@ config.before_checksum { |log| log.actor_role = Current.audit_role_for(log.actor
   `metadata_builder` now applies to direct writes too, so no change is needed
   beyond deleting the caveat.
 
+## Authentication Failures
+
+A request refused before any operation runs (an invalid or revoked token, a
+missing scope, a locked account) never reaches the operation audit contract, so
+the controller records it. `StandardAudit::AuthFailure` is that recorder:
+
+```ruby
+class Api::BaseController < ActionController::API
+  include StandardAudit::AuthFailure::Controller
+
+  rescue_from InvalidToken do
+    record_auth_failure("auth.token_invalid", "AUTH_001")
+    render json: { error: "AUTH_001" }, status: :unauthorized
+  end
+end
+
+# Outside a controller, with or without a request:
+StandardAudit::AuthFailure.record("auth.social_denied", "AUTH_009", request: request)
+StandardAudit::AuthFailure.record("auth.social_denied", "AUTH_009", path: "/auth/callback", actor: account)
+```
+
+- **Metadata is an allow-list:** `error_code`, `path`, `method` (with a
+  request), plus exactly the extra keywords you pass. Nothing comes from params,
+  headers or the exception. The rejected credential is in scope on this path, so
+  never pass it; `sensitive_keys` is only the backstop.
+- **Request context goes in the columns:** with `request:`, the request id, IP
+  and user agent are written explicitly, and the user agent is truncated to
+  1024 characters so an over-long header can't cost you the row.
+- **The actor** is usually nil. A value that isn't GlobalID-able is dropped.
+- **It never raises** (`raise: false`), so an audit failure can't turn a 401
+  into a 500. Failures go to `config.error_reporter`.
+- **`config.log_auth_failures = true`** also emits one structured
+  `Rails.logger.warn` line per failure, for alerting off the log stream.
+
+These are not operation actions, so leave them out of an `orphans_within:
+:catalogue` check (or out of the catalogue).
+
 ## Model Concerns
 
 ### Auditable

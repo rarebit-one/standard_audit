@@ -27,6 +27,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   example on, and the specs that would have noticed passed vacuously.
   `configure` calls inside an example are unaffected. **Upgrading:** move any
   boot-time plain `configure` into the single `configure(baseline: true)` block.
+- **`StandardAudit::AuthFailure`** records authentication failures: requests
+  refused before any operation runs. Include
+  `StandardAudit::AuthFailure::Controller` for a private
+  `record_auth_failure(event_type, error_code, actor: nil, **extra)`, or call
+  `StandardAudit::AuthFailure.record(..., request:/path:)` outside a controller.
+  It writes allow-listed metadata (`error_code`, `path`, `method`, plus the
+  caller's extras), the request id/IP/user agent as columns (user agent
+  truncated to 1024 characters), drops a non-GlobalID actor, and never raises.
+  `config.log_auth_failures = true` (default `false`) adds a structured warn
+  line. It replaces the hand-copied `AuditAuthFailure` concerns in
+  nutripod-web, luminality-web and sidekick-web.
 
 ### Changed
 

@@ -25,6 +25,7 @@ require "standard_audit/operation"
 require "standard_audit/auditable"
 require "standard_audit/audit_scope"
 require "standard_audit/checks/retention"
+require "standard_audit/auth_failure"
 
 module StandardAudit
   # Metadata keys owned internally by StandardAudit. Never filtered by

@@ -10,7 +10,7 @@ module StandardAudit
                   :current_session_id_resolver, :current_scope_resolver,
                   :before_write,
                   :sensitive_keys, :sensitive_key_patterns,
-                  :sensitive_key_exceptions, :filter_nested_metadata,
+                  :sensitive_key_exceptions, :filter_nested_metadata, :log_auth_failures,
                   :dereference_record_metadata,
                   :metadata_builder, :before_checksum_hooks,
                   :anonymizable_metadata_keys, :retention_days,
@@ -116,6 +116,12 @@ module StandardAudit
       # turned it on. Set false only to keep pre-0.14.0 rows comparable, after
       # a dry run (`rake standard_audit:sensitive_keys:dry_run`).
       @filter_nested_metadata = true
+
+      # When true, StandardAudit::AuthFailure.record also emits one structured
+      # `Rails.logger.warn` line per failure (event, error_code, path, ip,
+      # actor, timestamp), for alerting off the log stream. The audit row is
+      # written either way.
+      @log_auth_failures = false
 
       # When true (the default), an ActiveRecord object appearing anywhere in
       # audit metadata is replaced by a reference —
