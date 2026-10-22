@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-22
+
 ### Added
 
 - **`config.retention_days = :indefinite`** (or
@@ -52,6 +54,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `StandardAudit::RSpec::Coverage.covered_actions` and `.report`.
   It replaces the hand-synced `CATALOGUE_ACTIONS` copies in the
   apps' `spec/support/audit_log_coverage.rb`.
+
+### Fixed
+
+- A logger that raises no longer turns a swallowed audit failure into a raised
+  one. `report_write_error` and `report_error`'s own fallback both guard their
+  `Rails.logger` call, so `record(raise: false)`, the subscribers and
+  `AuthFailure.record` keep their never-raise guarantee.
 
 ### Changed
 

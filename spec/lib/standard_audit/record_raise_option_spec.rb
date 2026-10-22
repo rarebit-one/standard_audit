@@ -37,6 +37,27 @@ RSpec.describe StandardAudit, ".record(raise: false)" do
     expect(Rails.logger).to have_received(:error).with(/auth\.failed.*audit table on fire/)
   end
 
+  describe "with a logger that raises" do
+    before do
+      allow(Rails.logger).to receive(:error).and_raise(IOError, "log device closed")
+    end
+
+    it "still reports the write error and returns nil" do
+      break_writes!
+      allow(Rails.error).to receive(:report)
+
+      expect(StandardAudit.record("auth.failed", actor: user, raise: false)).to be_nil
+      expect(Rails.error).to have_received(:report).with(an_instance_of(ActiveRecord::StatementInvalid), hash_including(handled: true))
+    end
+
+    it "doesn't raise when the error reporter fails too" do
+      break_writes!
+      StandardAudit.config.error_reporter = ->(_error, _context) { raise "reporter down" }
+
+      expect(StandardAudit.record("auth.failed", actor: user, raise: false)).to be_nil
+    end
+  end
+
   describe "config.error_reporter" do
     it "receives the error and context instead of Rails.error" do
       break_writes!
