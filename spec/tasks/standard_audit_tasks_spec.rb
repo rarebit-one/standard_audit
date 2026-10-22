@@ -50,6 +50,16 @@ RSpec.describe "standard_audit rake tasks" do
       end
     end
 
+    it "aborts when retention_days is :indefinite and no days are given" do
+      StandardAudit.config.retention_days = :indefinite
+      log = create_log(occurred_at: 400.days.ago)
+
+      expect {
+        expect { run_task("standard_audit:#{task_name}") }.to raise_error(SystemExit)
+      }.to output(/retention_days is :indefinite/).to_stderr
+      expect(StandardAudit::AuditLog.exists?(log.id)).to be true
+    end
+
     it "aborts when retention_days is configured to a non-positive value" do
       StandardAudit.config.retention_days = 0
 

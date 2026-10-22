@@ -604,7 +604,8 @@ StandardAudit.configure(baseline: true) do |config|
 
   # -- Retention (schedule StandardAudit::CleanupJob to enforce) --
   # Defaults from STANDARD_AUDIT_RETENTION_DAYS (see Retention below); set here
-  # to override per app. Leave unset for infinite retention.
+  # to override per app. Leave unset for infinite retention, or set
+  # :indefinite to record keeping rows forever as a decision.
   config.retention_days = 90
 
   # -- Checksum cutover --
@@ -846,9 +847,18 @@ It defaults from the `STANDARD_AUDIT_RETENTION_DAYS` environment variable, so a
 deployment can opt into a retention window without a code change:
 
 ```bash
-STANDARD_AUDIT_RETENTION_DAYS=365   # keep 365 days
+STANDARD_AUDIT_RETENTION_DAYS=365          # keep 365 days
+STANDARD_AUDIT_RETENTION_DAYS=indefinite   # keep forever, on purpose
 # unset / blank / 0 / negative / non-numeric => nil => infinite retention
 ```
+
+`nil` and `:indefinite` both keep every row. The difference is intent: `nil`
+means nobody has decided, so the production advisory below warns, while
+`config.retention_days = :indefinite` records a deliberate keep-forever policy
+and the advisory reports ok. Don't set a huge day count (say 36,500) to silence
+the advisory; that is a window, so `CleanupJob` would one day act on it.
+`CleanupJob` does nothing for either, and the cleanup and archive rake tasks
+abort unless you pass days explicitly.
 
 Infinite retention (the default) is the compliance-safe behavior: nothing is
 ever auto-deleted. The `standard_audit:cleanup` and `standard_audit:archive`
@@ -872,7 +882,8 @@ end
 
 When `APP_ENVIRONMENT == "production"` (falling back to `Rails.env.production?`
 when that var is unset — so staging is not flagged) and `retention_days` is nil,
-the check returns `:warn`. That rolls `GET /health/ready` up to `:degraded`,
+the check returns `:warn`. With `:indefinite` it returns `:ok` with
+`retention: "indefinite"`. That rolls `GET /health/ready` up to `:degraded`,
 which is **still HTTP 200** — it surfaces the advisory in the readiness JSON
 without failing the probe or blocking a deploy. The check is duck-typed and has
 no hard dependency on `standard_health`.

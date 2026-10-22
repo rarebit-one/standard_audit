@@ -99,4 +99,38 @@ RSpec.describe "StandardAudit.configure(baseline:)" do
   it "returns the configuration and tolerates a blockless call" do
     expect(StandardAudit.configure).to be(StandardAudit.config)
   end
+
+  describe ".verify_baseline_configuration!" do
+    it "passes when everything went through the baseline block" do
+      StandardAudit.configure(baseline: true) { |c| c.queue_name = :audit }
+
+      expect(StandardAudit.verify_baseline_configuration!).to be(true)
+    end
+
+    it "passes when nothing was configured at all" do
+      expect(StandardAudit.verify_baseline_configuration!).to be(true)
+    end
+
+    it "raises, naming the call site, for a plain configure" do
+      StandardAudit.configure { |c| c.queue_name = :audit }
+
+      expect { StandardAudit.verify_baseline_configuration! }
+        .to raise_error(StandardAudit::BaselineConfigurationError, /without `baseline: true` at:\n  .*#{File.basename(__FILE__)}/)
+    end
+
+    it "raises for a plain configure even alongside a baseline, since reset drops it" do
+      StandardAudit.configure(baseline: true) { |c| c.queue_name = :audit }
+      StandardAudit.configure { |c| c.async = true }
+
+      expect { StandardAudit.verify_baseline_configuration! }
+        .to raise_error(StandardAudit::BaselineConfigurationError)
+    end
+
+    it "is cleared by clear_baseline_configuration!" do
+      StandardAudit.configure { |c| c.queue_name = :audit }
+      StandardAudit.clear_baseline_configuration!
+
+      expect(StandardAudit.verify_baseline_configuration!).to be(true)
+    end
+  end
 end

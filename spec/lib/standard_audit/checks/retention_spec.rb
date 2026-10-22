@@ -40,6 +40,13 @@ RSpec.describe StandardAudit::Checks::Retention do
       expect(result[:message]).to include("STANDARD_AUDIT_RETENTION_DAYS")
     end
 
+    it "is ok, and says so, when retention is deliberately :indefinite" do
+      result = run_with(app_environment: "production", retention_days: :indefinite)
+
+      expect(result[:status]).to eq(:ok)
+      expect(result[:retention]).to eq("indefinite")
+    end
+
     it "is ok when retention is configured" do
       result = run_with(app_environment: "production", retention_days: 365)
 

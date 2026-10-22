@@ -55,6 +55,29 @@ RSpec.describe StandardAudit::Configuration do
     end
   end
 
+  describe "#retention_window_days and #retention_indefinite?" do
+    it "returns the window for a positive Integer" do
+      config.retention_days = 90
+      expect(config.retention_window_days).to eq(90)
+      expect(config.retention_indefinite?).to be(false)
+    end
+
+    it "has no window for nil (undecided) or :indefinite (decided)" do
+      config.retention_days = nil
+      expect(config.retention_window_days).to be_nil
+      expect(config.retention_indefinite?).to be(false)
+
+      config.retention_days = :indefinite
+      expect(config.retention_window_days).to be_nil
+      expect(config.retention_indefinite?).to be(true)
+    end
+
+    it "has no window for a non-positive Integer" do
+      config.retention_days = 0
+      expect(config.retention_window_days).to be_nil
+    end
+  end
+
   describe "retention_days default from STANDARD_AUDIT_RETENTION_DAYS" do
     around do |example|
       original = ENV["STANDARD_AUDIT_RETENTION_DAYS"]
@@ -94,6 +117,11 @@ RSpec.describe StandardAudit::Configuration do
 
     it "is nil for non-numeric values" do
       expect(retention_for("forever")).to be_nil
+    end
+
+    it "reads the literal indefinite as :indefinite, case-insensitively" do
+      expect(retention_for("indefinite")).to eq(:indefinite)
+      expect(retention_for(" INDEFINITE ")).to eq(:indefinite)
     end
 
     it "stays overridable on the instance" do
