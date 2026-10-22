@@ -15,9 +15,11 @@ require "standard_audit"
 # sees every example, and a partial run (one file) would always look
 # uncovered. A literal `expect { … }.to have_audited("order.created")` in a
 # green suite means that example wrote the row, which is what coverage needs.
-# Negated assertions (`not_to have_audited`) do not count, and neither do
-# action names built at runtime (interpolated strings, constants): list those
-# under `pending:` with a comment, or assert them with a literal.
+# Negated assertions (`not_to have_audited`) and commented-out lines do not
+# count, and neither do action names built at runtime (interpolated strings,
+# constants): list those under `pending:` with a comment, or assert them with
+# a literal. The scan is line-based, so an assertion inside a heredoc or string
+# would still count; don't keep one there.
 #
 # This replaces the hand-maintained `CATALOGUE_ACTIONS` copies in
 # `spec/support/audit_log_coverage.rb` and the specs that kept them in sync
@@ -55,6 +57,8 @@ module StandardAudit
         files = Array(specs).flat_map { |glob| Dir.glob(File.expand_path(glob, root)) }.uniq.sort
         files.each_with_object(Hash.new { |h, k| h[k] = [] }) do |file, covered|
           File.foreach(file).with_index(1) do |line, number|
+            next if line.lstrip.start_with?("#")
+
             line.scan(ASSERTION) { |_quote, action| covered[action] << "#{relative(file, root)}:#{number}" }
           end
         end

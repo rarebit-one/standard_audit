@@ -44,7 +44,8 @@ module StandardAudit
   # go to `config.error_reporter` like any other non-raising record.
   #
   # With `config.log_auth_failures = true` each failure also emits one
-  # structured `Rails.logger.warn` line, for alerting off the log stream.
+  # structured `Rails.logger.warn` line, for alerting off the log stream. Its
+  # extras pass through MetadataFilter like the row's.
   module AuthFailure
     # Hosts commonly cap `audit_logs.user_agent` at 1024 characters.
     USER_AGENT_LIMIT = 1024
@@ -56,8 +57,9 @@ module StandardAudit
     def record(event_type, error_code, actor: nil, request: nil, path: nil, **extra_metadata)
       audit_actor = actor.respond_to?(:to_global_id) ? actor : nil
       path ||= request&.path
+      ip = request && client_ip(request)
 
-      log(event_type, error_code, actor, audit_actor, path, request, extra_metadata) if StandardAudit.config.log_auth_failures
+      log(event_type, error_code, actor, audit_actor, path, ip, extra_metadata) if StandardAudit.config.log_auth_failures
 
       metadata = {
         "error_code" => error_code,
@@ -69,24 +71,44 @@ module StandardAudit
       context = {}
       if request
         context[:request_id] = request.request_id
-        context[:ip_address] = request.remote_ip
+        context[:ip_address] = ip
         context[:user_agent] = request.user_agent&.slice(0, USER_AGENT_LIMIT)
       end
 
       StandardAudit.record(event_type, actor: audit_actor, metadata: metadata, raise: false, **context.compact)
+    rescue => e
+      # `raise: false` only covers the write. Building the row's inputs and the
+      # log line happens first, and must not turn the refusal into a 500 either.
+      StandardAudit.report_write_error(e, event_type, source: "StandardAudit::AuthFailure")
+      nil
     end
 
-    def log(event_type, error_code, actor, audit_actor, path, request, extra_metadata)
+    # `request.remote_ip` raises ActionDispatch::RemoteIp::IpSpoofAttackError
+    # for a request whose Client-IP and X-Forwarded-For disagree (with
+    # `check_ip_spoofing`, the default). A client controls both headers, so
+    # fall back to the socket address rather than fail.
+    def client_ip(request)
+      request.remote_ip
+    rescue => e
+      raise unless e.class.name == "ActionDispatch::RemoteIp::IpSpoofAttackError"
+
+      request.ip
+    end
+    private_class_method :client_ip
+
+    # The extras pass through MetadataFilter first, so the log line gets the
+    # same `sensitive_keys` backstop as the row.
+    def log(event_type, error_code, actor, audit_actor, path, ip, extra_metadata)
       return unless defined?(Rails) && Rails.respond_to?(:logger) && Rails.logger
 
       Rails.logger.warn({
         event: event_type,
         error_code: error_code,
         path: path,
-        ip: request&.remote_ip,
+        ip: ip,
         actor: audit_actor ? audit_actor.to_global_id.to_s : actor&.to_s,
         timestamp: Time.now.utc.iso8601,
-        **extra_metadata
+        **StandardAudit::MetadataFilter.call(extra_metadata).to_h.transform_keys(&:to_sym)
       }.compact)
     end
     private_class_method :log
