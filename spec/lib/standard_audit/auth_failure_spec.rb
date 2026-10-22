@@ -64,13 +64,13 @@ RSpec.describe StandardAudit::AuthFailure do
       expect(Rails.error).to have_received(:report).with(an_instance_of(ActiveRecord::StatementInvalid), hash_including(handled: true))
     end
 
-    it "falls back to the socket address when remote_ip detects IP spoofing" do
-      spoofed = ActionDispatch::TestRequest.create(
-        "PATH_INFO" => "/api/orders", "REQUEST_METHOD" => "GET", "REMOTE_ADDR" => "198.51.100.9",
-        "HTTP_CLIENT_IP" => "10.0.0.1", "HTTP_X_FORWARDED_FOR" => "10.0.0.2"
-      )
-      allow(spoofed).to receive(:remote_ip)
-        .and_raise(ActionDispatch::RemoteIp::IpSpoofAttackError, "IP spoofing attack?!")
+    it "falls back to request.ip when remote_ip detects IP spoofing" do
+      env = Rack::MockRequest.env_for("/api/orders",
+        "REMOTE_ADDR" => "198.51.100.9", "HTTP_CLIENT_IP" => "10.0.0.1", "HTTP_X_FORWARDED_FOR" => "10.0.0.2")
+      # The real middleware, so remote_ip raises for the real reason.
+      ActionDispatch::RemoteIp.new(->(_env) { [200, {}, []] }, true).call(env)
+      spoofed = ActionDispatch::Request.new(env)
+      expect { spoofed.remote_ip }.to raise_error(ActionDispatch::RemoteIp::IpSpoofAttackError)
 
       described_class.record("auth.token_invalid", "AUTH_001", request: spoofed)
 
@@ -104,6 +104,18 @@ RSpec.describe StandardAudit::AuthFailure do
         hash_including(event: "auth.token_revoked", error_code: "AUTH_003", path: "/api/orders",
           ip: "203.0.113.7", actor: user.to_global_id.to_s, reason: "revoked")
       )
+    end
+
+    it "still writes the row when the log line fails" do
+      StandardAudit.config.log_auth_failures = true
+      allow(Rails.logger).to receive(:warn).and_raise(IOError, "log device closed")
+      allow(StandardAudit).to receive(:report_write_error)
+
+      described_class.record("auth.token_invalid", "AUTH_001", request: request)
+
+      expect(last_log.event_type).to eq("auth.token_invalid")
+      expect(StandardAudit).to have_received(:report_write_error)
+        .with(an_instance_of(IOError), "auth.token_invalid", source: "StandardAudit::AuthFailure log line")
     end
 
     it "keeps a non-GlobalID actor in the log line, and filters its extras like the row" do
