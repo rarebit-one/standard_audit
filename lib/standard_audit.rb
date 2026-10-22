@@ -246,7 +246,11 @@ module StandardAudit
       nil
     rescue => report_failure
       message = "[StandardAudit] Error reporting audit failure: #{report_failure.class}: #{report_failure.message}"
-      Rails.logger&.error(message) if defined?(Rails) && Rails.respond_to?(:logger)
+      begin
+        Rails.logger&.error(message) if defined?(Rails) && Rails.respond_to?(:logger)
+      rescue StandardError
+        # Nothing left to tell: the reporter and the logger both failed.
+      end
       nil
     end
 
