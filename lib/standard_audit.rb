@@ -224,7 +224,12 @@ module StandardAudit
     # `report_error`. Used by the subscribers, which must never let an audit
     # failure break the instrumented code path, and by `record(raise: false)`.
     def report_write_error(error, event_type, **context)
-      Rails.logger.error("[StandardAudit] Error creating audit log for #{event_type}: #{error.class}: #{error.message}")
+      begin
+        Rails.logger.error("[StandardAudit] Error creating audit log for #{event_type}: #{error.class}: #{error.message}")
+      rescue StandardError
+        # A broken logger must not turn a swallowed failure into a raised one;
+        # the reporter below still runs.
+      end
       report_error(error, { config.audit_error_context_key => event_type, **context })
     end
 
