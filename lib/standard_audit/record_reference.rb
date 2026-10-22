@@ -14,8 +14,8 @@ module StandardAudit
   #
   # None of the three existing defences fired: `sensitive_keys` matches keys
   # exactly and the secrets are attributes *underneath* `account:`;
-  # `filter_nested_metadata` is off by default so the filter never descended
-  # to them; and `account:` does not look sensitive at the top level.
+  # `filter_nested_metadata` was off by default (until 0.14.0) so the filter
+  # never descended to them; and `account:` does not look sensitive at the top level.
   #
   # Key-based redaction is the wrong tool here — the leak is not "this key is
   # sensitive", it is "this value is an entire database row". So the value is

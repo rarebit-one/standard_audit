@@ -59,10 +59,10 @@ StandardAudit.configure(baseline: true) do |config|
   # can keep the handful of real audit keys it would otherwise swallow:
   # config.sensitive_key_exceptions = %i[input_tokens output_tokens]
   #
-  # Descend into nested Hashes when redacting. Off by default because it
-  # changes what gets written; `metadata: { stripe: { client_secret: ... } }`
-  # is NOT redacted unless you turn this on. Run the dry run first.
-  # config.filter_nested_metadata = true
+  # Redaction descends into nested Hashes by default (since 0.14.0), so
+  # `metadata: { stripe: { client_secret: ... } }` is redacted. Turning it off
+  # writes nested secrets intact; run the dry run first if you do.
+  # config.filter_nested_metadata = false
 
   # Run audit log creation in background job
   # config.async = false
