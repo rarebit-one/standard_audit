@@ -79,6 +79,20 @@ RSpec.describe StandardAudit::Checks::Retention do
     end
   end
 
+  context "when APP_ENVIRONMENT has the wrong case or extra whitespace" do
+    it "fails closed on a capitalised name" do
+      expect(run_with(app_environment: "Staging", retention_days: nil)[:status]).to eq(:warn)
+    end
+
+    it "ignores surrounding whitespace" do
+      expect(run_with(app_environment: " staging ", retention_days: nil)[:status]).to eq(:ok)
+    end
+
+    it "treats a blank value as unset" do
+      expect(run_with(app_environment: "  ", retention_days: nil)[:status]).to eq(:ok)
+    end
+  end
+
   context "when APP_ENVIRONMENT is unset" do
     it "falls back to Rails.env and does not warn in the test environment" do
       result = run_with(app_environment: nil, retention_days: nil)
