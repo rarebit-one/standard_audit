@@ -49,7 +49,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   apart from an explicit `pending:` list that may only shrink. It is a static
   scan of the spec files, so it behaves the same under `parallel_rspec` and in
   partial runs. Commented-out lines don't count. Predicates:
-  `StandardAudit::RSpec::Coverage.covered_actions` and `.report`. It replaces the hand-synced `CATALOGUE_ACTIONS` copies in the
+  `StandardAudit::RSpec::Coverage.covered_actions` and `.report`.
+  It replaces the hand-synced `CATALOGUE_ACTIONS` copies in the
   apps' `spec/support/audit_log_coverage.rb`.
 
 ### Changed

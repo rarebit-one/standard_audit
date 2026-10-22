@@ -118,6 +118,18 @@ RSpec.describe StandardAudit::AuthFailure do
         .with(an_instance_of(IOError), "auth.token_invalid", source: "StandardAudit::AuthFailure log line")
     end
 
+    it "still writes the row when the logger itself is broken" do
+      StandardAudit.config.log_auth_failures = true
+      allow(Rails.logger).to receive(:warn).and_raise(IOError, "log device closed")
+      allow(Rails.logger).to receive(:error).and_raise(IOError, "log device closed")
+      allow(Rails.error).to receive(:report)
+
+      expect { described_class.record("auth.token_invalid", "AUTH_001", request: request) }.not_to raise_error
+
+      expect(last_log.event_type).to eq("auth.token_invalid")
+      expect(Rails.error).to have_received(:report).with(an_instance_of(IOError), hash_including(handled: true))
+    end
+
     it "keeps a non-GlobalID actor in the log line, and filters its extras like the row" do
       StandardAudit.config.log_auth_failures = true
       logged = nil
