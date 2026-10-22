@@ -63,6 +63,22 @@ RSpec.describe StandardAudit::Checks::Retention do
     end
   end
 
+  context "on other non-production deployments" do
+    %w[preview development test].each do |name|
+      it "does not warn for APP_ENVIRONMENT=#{name}" do
+        expect(run_with(app_environment: name, retention_days: nil)[:status]).to eq(:ok)
+      end
+    end
+  end
+
+  # Fails closed: a misspelt APP_ENVIRONMENT on a production box must not
+  # silence the advisory.
+  context "when APP_ENVIRONMENT is unrecognised" do
+    it "treats it as production and warns" do
+      expect(run_with(app_environment: "prod", retention_days: nil)[:status]).to eq(:warn)
+    end
+  end
+
   context "when APP_ENVIRONMENT is unset" do
     it "falls back to Rails.env and does not warn in the test environment" do
       result = run_with(app_environment: nil, retention_days: nil)

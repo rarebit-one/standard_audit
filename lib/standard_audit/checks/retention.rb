@@ -19,10 +19,15 @@ module StandardAudit
     # the probe or blocking a deploy. Only a *critical* check failure returns
     # 503, and this check is never critical.
     #
-    # "Production" is ENV["APP_ENVIRONMENT"] == "production" when that var is
-    # set (so staging — which also runs RAILS_ENV=production — is not flagged);
+    # "Production" follows the estate's APP_ENVIRONMENT convention (shared
+    # with standard_id, standard_health and standard_singpass): when that var
+    # is set, only staging, preview, development and test are non-production
+    # (so staging, which also runs RAILS_ENV=production, is not flagged) and
+    # any other value is production, so a typo never silences the advisory;
     # otherwise it falls back to Rails.env.production?.
     class Retention
+      NON_PRODUCTION_APP_ENVIRONMENTS = %w[staging preview development test].freeze
+
       def initialize(name: :audit_retention, critical: false)
         @name = name
         @critical = critical
@@ -51,8 +56,8 @@ module StandardAudit
       private
 
       def production?
-        app_env = ENV["APP_ENVIRONMENT"].to_s
-        return app_env == "production" unless app_env.empty?
+        app_env = ENV["APP_ENVIRONMENT"].to_s.strip
+        return !NON_PRODUCTION_APP_ENVIRONMENTS.include?(app_env) unless app_env.empty?
 
         defined?(Rails) && Rails.respond_to?(:env) && Rails.env.production?
       end
