@@ -13,7 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `preview`, `development` and `test` are non-production; any other set value
   is production, so a misspelt `APP_ENVIRONMENT` can no longer silence the
   unbounded-retention advisory (before, only the exact value `production`
-  counted). Unset still falls back to `Rails.env.production?`. The estate
+  counted). Surrounding whitespace is ignored and matching is case-sensitive
+  (`Staging` is production). Unset or blank still falls back to
+  `Rails.env.production?`. The estate
   convention shared with standard_id, standard_health and standard_singpass.
 
 ## [0.14.0] - 2026-10-22

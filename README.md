@@ -949,9 +949,12 @@ StandardHealth.configure do |c|
 end
 ```
 
-When `APP_ENVIRONMENT == "production"` (falling back to `Rails.env.production?`
-when that var is unset — so staging is not flagged) and `retention_days` is nil,
-the check returns `:warn`. With `:indefinite` it returns `:ok` with
+On a production deployment with `retention_days` nil, the check returns `:warn`.
+"Production" follows the estate's `APP_ENVIRONMENT` convention: when the variable
+is set (surrounding whitespace ignored, matched case-sensitively), only
+`staging`, `preview`, `development` and `test` are non-production, so staging is
+not flagged, and any other value, a typo included, counts as production. When it
+is unset or blank, `Rails.env.production?` decides. With `:indefinite` it returns `:ok` with
 `retention: "indefinite"`. That rolls `GET /health/ready` up to `:degraded`,
 which is **still HTTP 200** — it surfaces the advisory in the readiness JSON
 without failing the probe or blocking a deploy. The check is duck-typed and has
