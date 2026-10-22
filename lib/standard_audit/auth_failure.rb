@@ -59,7 +59,7 @@ module StandardAudit
       path ||= request&.path
       ip = request && client_ip(request)
 
-      log(event_type, error_code, actor, audit_actor, path, ip, extra_metadata) if StandardAudit.config.log_auth_failures
+      safely_log(event_type, error_code, actor, audit_actor, path, ip, extra_metadata) if StandardAudit.config.log_auth_failures
 
       metadata = {
         "error_code" => error_code,
@@ -86,7 +86,8 @@ module StandardAudit
     # `request.remote_ip` raises ActionDispatch::RemoteIp::IpSpoofAttackError
     # for a request whose Client-IP and X-Forwarded-For disagree (with
     # `check_ip_spoofing`, the default). A client controls both headers, so
-    # fall back to the socket address rather than fail.
+    # fall back to Rack's `request.ip`, which ignores Client-IP, rather than
+    # fail.
     def client_ip(request)
       request.remote_ip
     rescue => e
@@ -95,6 +96,15 @@ module StandardAudit
       request.ip
     end
     private_class_method :client_ip
+
+    # The log line is secondary: if it fails, report that and still write the
+    # row, which is the record that matters.
+    def safely_log(event_type, *args)
+      log(event_type, *args)
+    rescue => e
+      StandardAudit.report_write_error(e, event_type, source: "StandardAudit::AuthFailure log line")
+    end
+    private_class_method :safely_log
 
     # The extras pass through MetadataFilter first, so the log line gets the
     # same `sensitive_keys` backstop as the row.
