@@ -45,6 +45,7 @@ RSpec.describe StandardAudit::RSpec::Coverage do
         expect { noop }.to_not have_audited("order.cancelled")
         expect { run }.to have_audited("order.\#{kind}")
         expect { run }.to have_audited(AuditCatalogue::ORDER_CREATED)
+          # expect { create_order }.to have_audited("order.commented_out")
       RUBY
 
       expect(described_class.covered_actions(root: @root)).to be_empty

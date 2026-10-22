@@ -36,16 +36,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `StandardAudit::AuthFailure.record(..., request:/path:)` outside a controller.
   It writes allow-listed metadata (`error_code`, `path`, `method`, plus the
   caller's extras), the request id/IP/user agent as columns (user agent
-  truncated to 1024 characters), drops a non-GlobalID actor, and never raises.
-  `config.log_auth_failures = true` (default `false`) adds a structured warn
-  line. It replaces the hand-copied `AuditAuthFailure` concerns in
+  truncated to 1024 characters), drops a non-GlobalID actor, and never raises,
+  including for a request whose forwarded-IP headers trip Rails' spoofing check
+  (it falls back to the socket address). `config.log_auth_failures = true`
+  (default `false`) adds a structured warn line whose extras pass through
+  `MetadataFilter` like the row's. It replaces the hand-copied `AuditAuthFailure` concerns in
   nutripod-web, luminality-web and sidekick-web.
 - **`"standard_audit catalogue coverage"`** shared example
   (`require "standard_audit/rspec/coverage"`): every catalogue action must be
   asserted by a positive literal `have_audited("…")` somewhere in the suite,
   apart from an explicit `pending:` list that may only shrink. It is a static
   scan of the spec files, so it behaves the same under `parallel_rspec` and in
-  partial runs. Predicates: `StandardAudit::RSpec::Coverage.covered_actions`
+  partial runs. Commented-out lines don't count. Predicates: `StandardAudit::RSpec::Coverage.covered_actions`
   and `.report`. It replaces the hand-synced `CATALOGUE_ACTIONS` copies in the
   apps' `spec/support/audit_log_coverage.rb`.
 

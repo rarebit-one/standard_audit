@@ -64,6 +64,28 @@ RSpec.describe StandardAudit::AuthFailure do
       expect(Rails.error).to have_received(:report).with(an_instance_of(ActiveRecord::StatementInvalid), hash_including(handled: true))
     end
 
+    it "falls back to the socket address when remote_ip detects IP spoofing" do
+      spoofed = ActionDispatch::TestRequest.create(
+        "PATH_INFO" => "/api/orders", "REQUEST_METHOD" => "GET", "REMOTE_ADDR" => "198.51.100.9",
+        "HTTP_CLIENT_IP" => "10.0.0.1", "HTTP_X_FORWARDED_FOR" => "10.0.0.2"
+      )
+      allow(spoofed).to receive(:remote_ip)
+        .and_raise(ActionDispatch::RemoteIp::IpSpoofAttackError, "IP spoofing attack?!")
+
+      described_class.record("auth.token_invalid", "AUTH_001", request: spoofed)
+
+      expect(last_log.ip_address).to eq("198.51.100.9")
+    end
+
+    it "never raises while building the row either" do
+      allow(request).to receive(:request_method).and_raise(RuntimeError, "broken request")
+      allow(StandardAudit).to receive(:report_write_error)
+
+      expect(described_class.record("auth.token_invalid", "AUTH_001", request: request)).to be_nil
+      expect(StandardAudit).to have_received(:report_write_error)
+        .with(an_instance_of(RuntimeError), "auth.token_invalid", source: "StandardAudit::AuthFailure")
+    end
+
     it "logs nothing by default" do
       allow(Rails.logger).to receive(:warn)
 
@@ -83,6 +105,19 @@ RSpec.describe StandardAudit::AuthFailure do
           ip: "203.0.113.7", actor: user.to_global_id.to_s, reason: "revoked")
       )
     end
+
+    it "keeps a non-GlobalID actor in the log line, and filters its extras like the row" do
+      StandardAudit.config.log_auth_failures = true
+      logged = nil
+      allow(Rails.logger).to receive(:warn) { |line| logged = line }
+
+      described_class.record("auth.token_invalid", "AUTH_001", actor: "user-42", request: request,
+        password: "hunter2", reason: "expired")
+
+      expect(logged).to include(actor: "user-42", reason: "expired")
+      expect(logged).not_to have_key(:password)
+      expect(last_log.metadata).not_to have_key("password")
+    end
   end
 
   describe StandardAudit::AuthFailure::Controller do
@@ -96,8 +131,8 @@ RSpec.describe StandardAudit::AuthFailure do
           @request = request
         end
 
-        def deny!
-          record_auth_failure("auth.invalid_scope", "AUTH_002", scope: "orders:write")
+        def deny!(actor: nil)
+          record_auth_failure("auth.invalid_scope", "AUTH_002", actor: actor, scope: "orders:write")
         end
       end
     end
@@ -114,6 +149,12 @@ RSpec.describe StandardAudit::AuthFailure do
         "error_code" => "AUTH_002", "path" => "/api/orders", "method" => "POST", "scope" => "orders:write"
       )
       expect(last_log.request_id).to eq("req-123")
+    end
+
+    it "forwards the actor" do
+      controller_class.new(request).deny!(actor: user)
+
+      expect(last_log.actor_gid).to eq(user.to_global_id.to_s)
     end
   end
 end
