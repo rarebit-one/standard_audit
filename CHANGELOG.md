@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`CreateAuditLogJob` no longer re-locates actor, target and scope.** The
+  enqueued attributes already carry the gid and type strings the row stores,
+  so the job writes them as they are instead of loading each record only to
+  serialise it back: up to three fewer SELECTs per async audit row. A gid whose
+  class has since been removed is now written instead of failing the job with
+  `NameError`. A `before_checksum` hook that reads `log.actor` (or target,
+  scope) still gets the record, located lazily on first read.
+
 ## [0.14.1] - 2026-10-22
 
 ### Changed
