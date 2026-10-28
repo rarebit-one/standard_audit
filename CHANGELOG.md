@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **`id_token` and `reset_url` are redacted by default.** Both are now in the
+  default `sensitive_keys`. An OIDC `id_token` is a bearer credential like the
+  `access_token`/`refresh_token` already listed, and a password-reset
+  `reset_url` embeds the live reset token, so a host subscribed to an event
+  that carries either wrote it into append-only rows. Nested metadata is
+  filtered by default, so `metadata: { tokens: { id_token: ... } }` is covered
+  too. Rows written before the upgrade are unchanged.
+
 ### Added
 
 - **A missed upgrade migration is no longer silent.** The first audit write in
