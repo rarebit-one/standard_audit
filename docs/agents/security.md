@@ -44,8 +44,9 @@ Moved verbatim from `AGENTS.md` in the P3 trim, except the last bullet, which wa
   template ships jsonb + GIN but the gem stays backend-neutral (the dummy is
   SQLite).
 - Default `sensitive_keys` cover password / token / secret / api_key /
-  access_token / refresh_token / private_key / certificate_chain / ssn /
-  credit_card / authorization. The `:authorization` key filters HTTP
+  access_token / refresh_token / id_token / reset_url / private_key /
+  certificate_chain / ssn / credit_card / authorization. `reset_url` is there
+  because a password-reset link embeds its live token. The `:authorization` key filters HTTP
   Authorization header values; rename policy-decision keys to avoid
   accidental filtering (e.g. `:authorization_policy`).
 - Checksum chain provides tamper-evidence but is best-effort under

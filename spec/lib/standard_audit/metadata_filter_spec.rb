@@ -15,6 +15,16 @@ RSpec.describe StandardAudit::MetadataFilter do
       expect(described_class.call({ _tags: { a: 1 }, password: "x" })).to eq(_tags: { a: 1 })
     end
 
+    it "strips an OIDC id_token nested under tokens and a password-reset reset_url by default" do
+      metadata = {
+        provider: "google",
+        tokens: { id_token: "eyJ.x.y", expires_in: 3600 },
+        reset_url: "https://example.test/reset?token=abc"
+      }
+
+      expect(described_class.call(metadata)).to eq(provider: "google", tokens: { expires_in: 3600 })
+    end
+
     it "passes nil through" do
       expect(described_class.call(nil)).to be_nil
     end

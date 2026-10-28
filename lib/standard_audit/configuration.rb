@@ -86,7 +86,8 @@ module StandardAudit
       # rename it (e.g. :authorization_policy) to avoid accidental filtering.
       @sensitive_keys = %i[
         password password_confirmation token secret
-        api_key access_token refresh_token
+        api_key access_token refresh_token id_token
+        reset_url
         private_key certificate_chain
         ssn credit_card authorization
       ]
