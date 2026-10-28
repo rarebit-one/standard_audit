@@ -683,6 +683,12 @@ StandardAudit.configure(baseline: true) do |config|
   # Only move it if your rollout slips, only to a future time, and never after
   # it has passed. See "Checksum algorithm versions".
   # config.canonical_checksum_since = Time.utc(2026, 10, 15)
+
+  # -- Schema check --
+  # What the first write in a process does when audit_logs lacks an upgrade
+  # migration: :warn (default) logs once, :raise fails writes, false skips.
+  # See "Detecting a missed upgrade".
+  # config.schema_check = :raise
 end
 ```
 
@@ -1140,6 +1146,25 @@ rake standard_audit:relink_checksums
 since it was written, so it adds no attestation the rows did not already carry.
 Rows it cannot resolve are reported as `unresolved` and keep failing
 verification — which is the point.
+
+#### Detecting a missed upgrade
+
+The first audit write in each process checks that `audit_logs` has the
+`previous_checksum` column and the `[created_at, id]` and `checksum` indexes
+(`StandardAudit::SchemaCheck`, one cached `connection.indexes` read). When any
+is missing it logs one warning naming the generator above. Writes carry on
+either way. `config.schema_check` controls it: `:warn` (default), `:raise` (fail
+every write with `StandardAudit::MissingUpgradeMigration`), or `false` (skip).
+
+On PostgreSQL with a large table, add `disable_ddl_transaction!` and
+`algorithm: :concurrently` to the generated `add_index` calls.
+
+To surface the gap in `/health/ready` as well, register the non-critical
+`StandardAudit::Checks::Schema` next to `Checks::Retention`:
+
+```ruby
+c.register_check :audit_schema, StandardAudit::Checks::Schema, critical: false
+```
 
 **Do not run `backfill_checksums!` to make a red `verify_chain` go green.** It
 re-signs rows from their current contents, so it attests only that a script ran.

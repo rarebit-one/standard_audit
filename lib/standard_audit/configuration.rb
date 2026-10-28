@@ -17,7 +17,7 @@ module StandardAudit
                   :audit_catalogue, :verify_audit_declarations,
                   :raise_on_audit_write_error, :audit_write_error_handler,
                   :audit_error_context_key, :error_reporter,
-                  :canonical_checksum_since
+                  :canonical_checksum_since, :schema_check
 
     def initialize
       @subscriptions = []
@@ -253,6 +253,11 @@ module StandardAudit
       # advisory (StandardAudit::Checks::Retention) only warns on nil, which
       # means nobody chose.
       @retention_days = self.class.retention_days_from_env
+
+      # What the first audit write in a process does when audit_logs lacks an
+      # upgrade migration (StandardAudit::SchemaCheck): :warn logs one warning
+      # naming the generator, :raise fails every write, false skips the check.
+      @schema_check = :warn
     end
 
     # The retention window as a positive Integer of days, or nil when rows are

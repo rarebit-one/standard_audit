@@ -679,6 +679,7 @@ module StandardAudit
     # Record keeps a timestamp that is already set) so the decision is made
     # from exactly the value that is stored and that verification re-reads.
     def compute_checksum
+      StandardAudit::SchemaCheck.verify!
       self.created_at ||= Time.current if has_attribute?(:created_at)
       previous = self.class.chain_tip_checksum
       self.previous_checksum = previous if self.class.chain_parent_column?
