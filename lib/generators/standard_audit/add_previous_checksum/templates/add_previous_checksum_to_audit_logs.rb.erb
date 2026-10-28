@@ -1,17 +1,18 @@
 class AddPreviousChecksumToAuditLogs < ActiveRecord::Migration[<%= ActiveRecord::Migration.current_version %>]
-  def change
-    # On PostgreSQL with a large audit_logs table, add
-    # `disable_ddl_transaction!` above and pass `algorithm: :concurrently` to
-    # the add_index calls — StrongMigrations will ask for it.
-    #
-    # Nullable and index-only: no data is rewritten. Existing rows keep a NULL
-    # parent and are verified by position and parent recovery, exactly as they
-    # are today. Run `rake standard_audit:relink_checksums` afterwards to
-    # record the parent each existing row was actually signed against.
-    #
-    # Every step is guarded, so the migration also repairs a table that has
-    # the column but is missing an index (StandardAudit::SchemaCheck warns
-    # about either gap with this same generator).
+  # On PostgreSQL with a large audit_logs table, add
+  # `disable_ddl_transaction!` here and pass `algorithm: :concurrently` to
+  # the add_index calls — StrongMigrations will ask for it.
+  #
+  # Nullable and index-only: no data is rewritten. Existing rows keep a NULL
+  # parent and are verified by position and parent recovery, exactly as they
+  # are today. Run `rake standard_audit:relink_checksums` afterwards to
+  # record the parent each existing row was actually signed against.
+  #
+  # Every step in `up` is guarded, so the migration also repairs a table that
+  # has the column but is missing an index (StandardAudit::SchemaCheck warns
+  # about either gap with this same generator). `up`/`down` rather than
+  # `change`, because guards inside `change` would make the rollback a no-op.
+  def up
     add_column :audit_logs, :previous_checksum, :string, limit: 64 unless column_exists?(:audit_logs, :previous_checksum)
     # Not used by the gem itself: verification reads previous_checksum off rows
     # it has already loaded. It is here for forensics — "what forked off this
@@ -23,5 +24,13 @@ class AddPreviousChecksumToAuditLogs < ActiveRecord::Migration[<%= ActiveRecord:
     # verify_chain looks a declared parent up by digest when it falls outside
     # the in-memory recovery window — the path that reports a removed row.
     add_index :audit_logs, :checksum unless index_exists?(:audit_logs, :checksum)
+  end
+
+  # Removes the column (and its index). The [created_at, id] and checksum
+  # indexes stay: the table may have had them before this migration, and
+  # they cost nothing to keep.
+  def down
+    remove_index :audit_logs, :previous_checksum if index_exists?(:audit_logs, :previous_checksum)
+    remove_column :audit_logs, :previous_checksum if column_exists?(:audit_logs, :previous_checksum)
   end
 end
