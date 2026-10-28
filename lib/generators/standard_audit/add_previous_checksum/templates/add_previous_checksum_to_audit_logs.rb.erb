@@ -8,11 +8,15 @@ class AddPreviousChecksumToAuditLogs < ActiveRecord::Migration[<%= ActiveRecord:
     # parent and are verified by position and parent recovery, exactly as they
     # are today. Run `rake standard_audit:relink_checksums` afterwards to
     # record the parent each existing row was actually signed against.
-    add_column :audit_logs, :previous_checksum, :string, limit: 64
+    #
+    # Every step is guarded, so the migration also repairs a table that has
+    # the column but is missing an index (StandardAudit::SchemaCheck warns
+    # about either gap with this same generator).
+    add_column :audit_logs, :previous_checksum, :string, limit: 64 unless column_exists?(:audit_logs, :previous_checksum)
     # Not used by the gem itself: verification reads previous_checksum off rows
     # it has already loaded. It is here for forensics — "what forked off this
     # row?" — which is the question you ask once verification flags something.
-    add_index :audit_logs, :previous_checksum
+    add_index :audit_logs, :previous_checksum unless index_exists?(:audit_logs, :previous_checksum)
     # verify_chain / backfill_checksums! walk the table with a keyset cursor
     # ordered by (created_at, id).
     add_index :audit_logs, [:created_at, :id] unless index_exists?(:audit_logs, [:created_at, :id])

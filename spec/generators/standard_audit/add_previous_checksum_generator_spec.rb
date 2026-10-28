@@ -31,6 +31,15 @@ RSpec.describe StandardAudit::Generators::AddPreviousChecksumGenerator do
     expect(content).not_to include("update")
   end
 
+  it "guards every step so it can repair a table that already has the column" do
+    content = migration_content
+
+    expect(content).to include("unless column_exists?(:audit_logs, :previous_checksum)")
+    expect(content).to include("add_index :audit_logs, :previous_checksum unless index_exists?(:audit_logs, :previous_checksum)")
+    expect(content).to include("unless index_exists?(:audit_logs, [:created_at, :id])")
+    expect(content).to include("unless index_exists?(:audit_logs, :checksum)")
+  end
+
   it "points at the relink task rather than leaving existing rows unexplained" do
     expect(migration_content).to include("standard_audit:relink_checksums")
   end
