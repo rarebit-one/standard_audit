@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`anonymize_actor!` also strips anonymizable keys from nested metadata.**
+  It used to drop `anonymizable_metadata_keys` (`email`, `name`, `ip_address`)
+  from the top level only, so a publisher that nests the subject's details
+  (standard_id's `social.auth.completed` carries `social_info: { email: ... }`)
+  kept them after erasure. With `filter_nested_metadata` on (the default since
+  0.14.0) it now walks nested hashes and arrays, as the write-side filter does.
+
 ## [0.15.0] - 2026-10-28
 
 ### Security

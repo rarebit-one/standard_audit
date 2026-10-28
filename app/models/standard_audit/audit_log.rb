@@ -124,8 +124,7 @@ module StandardAudit
         attrs[:target_type] = "[anonymized]" if log.target_gid == gid
 
         if log.metadata.present? && anonymizable_keys.any?
-          cleaned_metadata = log.metadata.reject { |k, _| anonymizable_keys.include?(k.to_s) }
-          attrs[:metadata] = cleaned_metadata
+          attrs[:metadata] = strip_anonymizable_keys(log.metadata, anonymizable_keys)
         end
 
         attrs[:anonymized_at] = log.anonymized_at || stamp if stamp
@@ -135,6 +134,31 @@ module StandardAudit
 
       count
     end
+
+    # Drops the anonymizable keys from +metadata+. Nested hashes (and hashes
+    # inside arrays) are walked too when `filter_nested_metadata` is on, as the
+    # write-side MetadataFilter does: a publisher that nests the subject's
+    # email (standard_id's social `social_info: { email: ... }`) would
+    # otherwise keep it after erasure.
+    def self.strip_anonymizable_keys(metadata, keys)
+      cleaned = metadata.reject { |k, _| keys.include?(k.to_s) }
+      return cleaned unless StandardAudit.config.filter_nested_metadata
+
+      cleaned.to_h { |k, v| [k, strip_anonymizable_descendant(v, keys)] }
+    end
+
+    def self.strip_anonymizable_descendant(value, keys)
+      case value
+      when Hash
+        value.reject { |k, _| keys.include?(k.to_s) }
+             .to_h { |k, v| [k, strip_anonymizable_descendant(v, keys)] }
+      when Array
+        value.map { |element| strip_anonymizable_descendant(element, keys) }
+      else
+        value
+      end
+    end
+    private_class_method :strip_anonymizable_keys, :strip_anonymizable_descendant
 
     # True when the table carries `anonymized_at` (the
     # `standard_audit:add_anonymized_at` migration, or a 0.12+ install).

@@ -67,6 +67,34 @@ RSpec.describe StandardAudit::AuditLog, "GDPR", type: :model do
       expect(log.metadata).not_to have_key("ip_address")
     end
 
+    it "strips configured keys from nested metadata too (standard_id's social_info shape)" do
+      log = create_log(
+        actor: user,
+        metadata: {
+          "provider" => "google",
+          "social_info" => { "email" => "alice@example.com", "name" => "Alice", "sub" => "123" },
+          "identities" => [{ "email" => "alice@example.com", "kind" => "email" }]
+        }
+      )
+
+      described_class.anonymize_actor!(user)
+
+      expect(log.reload.metadata).to eq(
+        "provider" => "google",
+        "social_info" => { "sub" => "123" },
+        "identities" => [{ "kind" => "email" }]
+      )
+    end
+
+    it "leaves nested metadata alone when filter_nested_metadata is off" do
+      StandardAudit.config.filter_nested_metadata = false
+      log = create_log(actor: user, metadata: { "email" => "a@example.com", "social_info" => { "email" => "a@example.com" } })
+
+      described_class.anonymize_actor!(user)
+
+      expect(log.reload.metadata).to eq("social_info" => { "email" => "a@example.com" })
+    end
+
     it "also anonymizes target_gid references" do
       log = create_log(
         actor: other_user,
