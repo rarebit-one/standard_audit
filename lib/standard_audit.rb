@@ -27,7 +27,9 @@ require "standard_audit/reference_preloading"
 require "standard_audit/operation"
 require "standard_audit/auditable"
 require "standard_audit/audit_scope"
+require "standard_audit/schema_check"
 require "standard_audit/checks/retention"
+require "standard_audit/checks/schema"
 require "standard_audit/auth_failure"
 
 module StandardAudit
@@ -335,6 +337,7 @@ module StandardAudit
     end
 
     def flush_batch(buffer)
+      StandardAudit::SchemaCheck.verify!
       now = Time.current
       records_parent = StandardAudit::AuditLog.chain_parent_column?
       previous_checksum = StandardAudit::AuditLog.chain_tip_checksum

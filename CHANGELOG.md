@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A missed upgrade migration is no longer silent.** The first audit write in
+  each process checks `audit_logs` for the `previous_checksum` column and the
+  `[created_at, id]` and `checksum` indexes, and logs one warning naming
+  `rails generate standard_audit:add_previous_checksum` when any is missing
+  (`StandardAudit::SchemaCheck`; one cached `connection.indexes` read per
+  process). Without them no chain parents are recorded, so fork-tolerant
+  `verify_chain` is inactive. `config.schema_check` is `:warn` by default;
+  `:raise` fails writes with `StandardAudit::MissingUpgradeMigration`, `false`
+  skips the check. `StandardAudit::Checks::Schema` reports the same gap to
+  StandardHealth as a non-critical `:warn`.
+
 ## [0.14.1] - 2026-10-22
 
 ### Changed
