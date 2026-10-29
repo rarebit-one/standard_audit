@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `verify_chain` and `relink_checksums!` now find a parent that sorts **after**
+  its child: two concurrent writers, the parent committed first (so the child
+  read its checksum as the tip) but stamped `created_at` a few milliseconds
+  later. The backward recovery window never held it, so a sound row was
+  reported as `:digest_mismatch` and never relinked (3 rows on one production
+  host, 2026-10-30). A row that reproduces no earlier digest is now held for
+  the next `lookahead` rows (default 64, `lookahead: 0` disables) and counted
+  as `:recovered` / relinked when one of them is its parent.
+
 ## [0.15.1] - 2026-10-28
 
 ### Fixed

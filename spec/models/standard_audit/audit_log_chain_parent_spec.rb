@@ -99,6 +99,51 @@ RSpec.describe StandardAudit::AuditLog, "chain parents" do
       expect(result[:failures].first[:reason]).to eq(:digest_mismatch)
     end
 
+    # Two concurrent writers: the parent committed first (so the child read its
+    # checksum as the tip) but carries a later created_at, and the child predates
+    # the previous_checksum column. Seen in production (3 rows, 2026-10-30).
+    # create_log sleeps 2 ms per row, so parent - 1 ms still sorts after "first".
+    it "verifies and relinks a child whose parent sorts after it" do
+      create_log("first")
+      parent = create_log("parent")
+      child = create_log("child")
+      child.update_columns(created_at: parent.created_at - 0.001, previous_checksum: nil)
+
+      result = described_class.verify_chain
+      expect(result[:valid]).to be true
+      expect(result[:recovered]).to eq(1)
+
+      expect(described_class.relink_checksums!).to include(relinked: 1, unresolved: 0)
+      expect(child.reload.previous_checksum).to eq(parent.checksum)
+      expect(described_class.verify_chain).to include(valid: true, recovered: 0)
+    end
+
+    it "gives up on a forward parent beyond the lookahead, and never relinks it" do
+      create_log("first")
+      parent = create_log("parent")
+      child = create_log("child")
+      child.update_columns(created_at: parent.created_at - 0.001, previous_checksum: nil)
+
+      result = described_class.verify_chain(lookahead: 0)
+      expect(result[:valid]).to be false
+      expect(result[:failures].map { |f| [f[:id], f[:reason]] }).to eq([[child.id, :digest_mismatch]])
+      expect(described_class.relink_checksums!(lookahead: 0)).to include(relinked: 0, unresolved: 1)
+      expect(child.reload.previous_checksum).to be_nil
+    end
+
+    it "still reports a tampered row that no later row explains" do
+      create_log("first")
+      parent = create_log("parent")
+      child = create_log("child")
+      child.update_columns(created_at: parent.created_at - 0.001, previous_checksum: nil, event_type: "child.tampered")
+      create_log("later")
+
+      result = described_class.verify_chain
+      expect(result[:valid]).to be false
+      expect(result[:failures].map { |f| [f[:id], f[:reason]] }).to eq([[child.id, :digest_mismatch]])
+      expect(described_class.relink_checksums!).to include(relinked: 0, unresolved: 1)
+    end
+
     it "detects a rewritten parent pointer" do
       first = create_log("first")
       second = create_log("second")
