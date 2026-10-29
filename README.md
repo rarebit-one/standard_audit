@@ -1128,6 +1128,10 @@ They have no `previous_checksum`. Verification falls back to the preceding row
 in the walk and, failing that, searches back through the last `recovery_window`
 (default 256) digests for the one that reproduces the row's checksum — which
 recovers the true parent of a row that forked, **without re-signing anything**.
+A parent can also sort *after* its child (two concurrent writers: the parent
+committed first, so the child read its checksum as the tip, but was stamped a
+few milliseconds later), so a row that reproduces no earlier digest is held for
+the next `lookahead` rows (default 64) before it is reported.
 This does not weaken tamper detection: a row whose fields were altered
 reproduces no candidate's digest. Pass `strict: true` to skip the search and see
 every fork as a failure.

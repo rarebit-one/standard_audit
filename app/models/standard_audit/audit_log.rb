@@ -360,6 +360,13 @@ module StandardAudit
     #     this window search, so a legacy row that was both forked and
     #     reordered stays unverifiable.)
     #
+    # A parent can also sort AFTER its child: two concurrent writers, the
+    # parent committed first (so the child read its checksum as the tip) but
+    # stamped `created_at` a few milliseconds later. The backward window never
+    # holds it, so a row that reproduces no earlier digest is held for the next
+    # `lookahead` rows and counted as :recovered when one of them is its
+    # parent; only then is it a :digest_mismatch. (`lookahead: 0` disables it.)
+    #
     # The chain links across the cutover like anywhere else: the first
     # canonical row's parent is the last legacy row's stored checksum.
     #
@@ -379,7 +386,7 @@ module StandardAudit
     # `created_at`. Rows whose two timestamps disagree (a backdated
     # `occurred_at`) can leave a hole rather than a prefix, and a hole is
     # reported — truthfully, since rows really are missing.
-    def self.verify_chain(scope: nil, batch_size: 1000, recovery_window: 256, strict: false,
+    def self.verify_chain(scope: nil, batch_size: 1000, recovery_window: 256, lookahead: 64, strict: false,
       key_order_search_limit: StandardAudit::Checksum::KeyOrderSearch::DEFAULT_LIMIT,
       fail_on_legacy_unverifiable: false)
       relation = scope ? where(scope_gid: scope.to_global_id.to_s) : all
@@ -395,6 +402,10 @@ module StandardAudit
       unverifiable = []
       failures = []
       window = []
+      # Rows whose parent may still be AHEAD in the walk (see `lookahead`):
+      # [{ record:, algorithm:, expected:, seen: }], resolved against each
+      # later row's checksum, given up after `lookahead` rows.
+      pending = []
       first_row = true
       pruned_parents = []
 
@@ -424,6 +435,17 @@ module StandardAudit
           previous_checksum = nil
           window.clear
           next
+        end
+
+        pending.delete_if do |p|
+          if walk_digester(p[:record], p[:algorithm]).call(record.checksum) == p[:record].checksum
+            recovered += 1
+          elsif (p[:seen] += 1) >= lookahead
+            failures << chain_failure(p[:record], expected: p[:expected], reason: :digest_mismatch)
+          else
+            next false
+          end
+          true
         end
 
         declared = declared_parents ? record.previous_checksum : nil
@@ -465,6 +487,10 @@ module StandardAudit
               unverifiable << entry
               failures << entry if fail_on_legacy_unverifiable
             end
+          elsif declared.blank? && !strict && lookahead.positive?
+            # Its parent may sort AFTER it (committed first, stamped later by a
+            # concurrent writer); decided when the next `lookahead` rows pass.
+            pending << { record: record, algorithm: algorithm, expected: expected, seen: 0 }
           else
             failures << chain_failure(record, expected: expected, reason: :digest_mismatch)
           end
@@ -475,6 +501,8 @@ module StandardAudit
         window << record.checksum
         window.shift if window.size > recovery_window
       end
+
+      pending.each { |p| failures << chain_failure(p[:record], expected: p[:expected], reason: :digest_mismatch) }
 
       {
         valid: failures.empty?,
@@ -499,7 +527,7 @@ module StandardAudit
     # the row has held since it was written. Rows whose parent cannot be
     # reproduced are left untouched and counted in :unresolved — they are the
     # rows verification should keep reporting.
-    def self.relink_checksums!(batch_size: 1000, recovery_window: 256)
+    def self.relink_checksums!(batch_size: 1000, recovery_window: 256, lookahead: 64)
       return { relinked: 0, unresolved: 0, skipped: 0 } unless chain_parent_column?
 
       previous_checksum = nil
@@ -507,6 +535,7 @@ module StandardAudit
       unresolved = 0
       skipped = 0
       window = []
+      pending = [] # rows whose parent may still be ahead (see verify_chain's `lookahead`)
 
       each_in_chain_order(all, batch_size: batch_size) do |record|
         if record.checksum.blank?
@@ -515,12 +544,28 @@ module StandardAudit
           next
         end
 
+        pending.delete_if do |p|
+          if walk_digester(p[:record], p[:algorithm]).call(record.checksum) == p[:record].checksum
+            p[:record].update_columns(previous_checksum: record.checksum)
+            relinked += 1
+          elsif (p[:seen] += 1) >= lookahead
+            unresolved += 1
+          else
+            next false
+          end
+          true
+        end
+
         found = resolve_parent(record, previous_checksum, window) if record.previous_checksum.blank?
 
         if record.previous_checksum.present?
           skipped += 1
         elsif found.nil?
-          unresolved += 1
+          if lookahead.positive?
+            pending << { record: record, algorithm: StandardAudit::Checksum.algorithm_for(record.created_at), seen: 0 }
+          else
+            unresolved += 1
+          end
         elsif found.first.present?
           record.update_columns(previous_checksum: found.first)
           relinked += 1
@@ -534,6 +579,7 @@ module StandardAudit
         window.shift if window.size > recovery_window
       end
 
+      unresolved += pending.size
       { relinked: relinked, unresolved: unresolved, skipped: skipped }
     end
 
