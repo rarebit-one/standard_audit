@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.2] - 2026-10-30
+
 ### Fixed
 - `verify_chain` and `relink_checksums!` now find a parent that sorts **after**
   its child: two concurrent writers, the parent committed first (so the child
