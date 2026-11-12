@@ -3,7 +3,7 @@ require_relative "lib/standard_audit/version"
 Gem::Specification.new do |spec|
   spec.name        = "standard_audit"
   spec.version     = StandardAudit::VERSION
-  spec.authors     = ["Jaryl Sim"]
+  spec.authors     = ["Rarebit One"]
   spec.email       = ["code@jaryl.dev"]
   spec.homepage    = "https://github.com/rarebit-one/standard_audit"
   spec.summary     = "Database-backed audit logging for Rails via Rails.event and ActiveSupport::Notifications."
