@@ -3,6 +3,13 @@ module StandardAudit
     # `config.retention_days = :indefinite`: keep audit rows forever, on purpose.
     INDEFINITE_RETENTION = :indefinite
 
+    # The `audit_catalogue` default: the host's `AuditCatalogue::ACTIONS` when
+    # it defines one, nil otherwise. `const_defined?(:ACTIONS, false)` looks on
+    # AuditCatalogue only, so a stray top-level `ACTIONS` never counts.
+    DEFAULT_AUDIT_CATALOGUE = -> {
+      ::AuditCatalogue::ACTIONS if defined?(::AuditCatalogue) && ::AuditCatalogue.const_defined?(:ACTIONS, false)
+    }
+
     attr_accessor :async, :queue_name, :enabled,
                   :actor_extractor, :target_extractor, :scope_extractor,
                   :current_actor_resolver, :current_request_id_resolver,
@@ -172,11 +179,17 @@ module StandardAudit
       #   config.audit_catalogue = -> { AuditCatalogue::ACTIONS }
       #
       # A plain Array is accepted when the vocabulary really is a frozen
-      # literal. `nil` (the default) skips the membership check entirely, so
-      # the DSL is adoptable before an app has a catalogue.
+      # literal. A callable returning nil (or a plain `nil`) skips the
+      # membership check entirely, so the DSL is adoptable before an app has a
+      # catalogue.
+      #
+      # The default follows the estate convention: a host that defines
+      # `AuditCatalogue::ACTIONS` gets it without configuring anything, and a
+      # host that doesn't gets nil, exactly as when the default was nil.
+      # Resolved per call, like a host-set callable, so Zeitwerk can reload it.
       #
       # Membership is the ONLY rule applied — see StandardAudit::Operation.
-      @audit_catalogue = nil
+      @audit_catalogue = DEFAULT_AUDIT_CATALOGUE
 
       # Whether `audit!` verifies the declaration before writing. A callable
       # (or a plain boolean). Defaults to local environments only: in

@@ -8,7 +8,8 @@ module StandardAudit
     # StandardHealth aggregator calls, so it loads even where standard_health
     # is absent.
     #
-    # Register it (NON-critical) in config/initializers/standard_health.rb:
+    # lib/standard_audit/health_contributions.rb contributes it (NON-critical)
+    # to standard_health's register_default_checks. To register it by hand:
     #
     #   c.register_check :audit_retention,
     #                    StandardAudit::Checks::Retention,

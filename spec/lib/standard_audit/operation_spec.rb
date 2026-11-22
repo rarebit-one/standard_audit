@@ -131,9 +131,18 @@ RSpec.describe StandardAudit::Operation do
     let(:klass) { operation_class { audits "order.created" } }
 
     it "is skipped entirely when no catalogue is configured" do
-      expect(StandardAudit.config.audit_catalogue).to be_nil
+      hide_const("AuditCatalogue")
+      klass = operation_class { audits "anything.goes" }
+
+      expect { run(klass, "anything.goes") }.to change(StandardAudit::AuditLog, :count).by(1)
+    end
+
+    it "uses the host's AuditCatalogue::ACTIONS without any configuration" do
+      unlisted = operation_class { audits "order.ghost" }
 
       expect { run(klass, "order.created") }.to change(StandardAudit::AuditLog, :count).by(1)
+      expect { run(unlisted, "order.ghost") }
+        .to raise_error(described_class::DeclarationError, /not in the configured audit catalogue/)
     end
 
     it "raises when the action is absent from the catalogue" do
@@ -319,7 +328,7 @@ RSpec.describe StandardAudit::Operation do
       StandardAudit.reset_configuration!
       config = StandardAudit.config
 
-      expect(config.audit_catalogue).to be_nil
+      expect(config.audit_catalogue).to be(StandardAudit::Configuration::DEFAULT_AUDIT_CATALOGUE)
       expect(config.raise_on_audit_write_error).to be(false)
       expect(config.audit_write_error_handler).to be_nil
       expect(config.verify_audit_declarations).to respond_to(:call)

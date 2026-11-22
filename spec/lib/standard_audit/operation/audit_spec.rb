@@ -67,7 +67,26 @@ RSpec.describe StandardAudit::Operation::Audit do
   end
 
   describe ".catalogue" do
-    it "is nil when unconfigured, which skips every membership check" do
+    it "is nil when unconfigured and the host has no AuditCatalogue, which skips every membership check" do
+      hide_const("AuditCatalogue")
+
+      expect(described_class.catalogue).to be_nil
+    end
+
+    it "defaults to the host's AuditCatalogue::ACTIONS" do
+      expect(described_class.catalogue).to eq(AuditCatalogue::ACTIONS)
+    end
+
+    it "is nil by default when AuditCatalogue defines no ACTIONS" do
+      stub_const("AuditCatalogue", Module.new)
+
+      expect(described_class.catalogue).to be_nil
+    end
+
+    it "ignores a top-level ACTIONS when AuditCatalogue lacks its own" do
+      stub_const("AuditCatalogue", Module.new)
+      stub_const("ACTIONS", %w[stray.action])
+
       expect(described_class.catalogue).to be_nil
     end
 
@@ -115,6 +134,8 @@ RSpec.describe StandardAudit::Operation::Audit do
     end
 
     it "is empty when no catalogue is configured" do
+      hide_const("AuditCatalogue")
+
       expect(described_class.unknown_actions(operations: [klass])).to eq({})
     end
   end
@@ -137,6 +158,8 @@ RSpec.describe StandardAudit::Operation::Audit do
     end
 
     it "is empty when no catalogue and no slice is given" do
+      hide_const("AuditCatalogue")
+
       expect(described_class.orphan_actions(operations: [klass])).to eq([])
     end
   end

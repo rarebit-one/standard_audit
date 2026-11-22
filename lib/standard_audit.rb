@@ -30,6 +30,7 @@ require "standard_audit/audit_scope"
 require "standard_audit/schema_check"
 require "standard_audit/checks/retention"
 require "standard_audit/checks/schema"
+require "standard_audit/health_contributions"
 require "standard_audit/auth_failure"
 
 module StandardAudit
