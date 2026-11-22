@@ -59,11 +59,17 @@ RSpec.describe "standard_health contributions" do
     expect(health.checks.map { |c| c[:klass] }).to all(be_a(String))
   end
 
-  it "declares STANDARD_AUDIT_RETENTION_DAYS as recommended, describing both accepted values" do
+  it "declares STANDARD_AUDIT_RETENTION_DAYS as recommended on production, describing both accepted values" do
     entry = health.env_vars.fetch("standard_audit").find { |e| e[:name] == :STANDARD_AUDIT_RETENTION_DAYS }
 
-    expect(entry).to include(level: :recommended)
-    expect(entry[:description]).to include("positive integer", "indefinite")
+    expect(entry).to include(level: :recommended, in: %w[production])
+    expect(entry[:description]).to include("positive integer", "indefinite", "retention_days_from_env")
+  end
+
+  # standard_health reads consumed_by as a file path under the app root, so a
+  # method name there shows every app `consumer: :file_missing`.
+  it "names no consumed_by, since the consumer is in the gem, not the app" do
+    expect(health.env_vars.values.flatten).to all(satisfy { |e| !e.key?(:consumed_by) })
   end
 
   it "declares no env var outside the gem's own namespace" do

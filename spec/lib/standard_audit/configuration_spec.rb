@@ -139,6 +139,26 @@ RSpec.describe StandardAudit::Configuration do
 
       expect(config.subscriptions).to eq(["audit.**", "user.*"])
     end
+
+    it "adds several patterns in one call, in order" do
+      config.subscribe_to "audit.**"
+      config.subscribe_to "user.*", /\Abilling\./
+
+      expect(config.subscriptions).to eq(["audit.**", "user.*", /\Abilling\./])
+    end
+
+    it "takes a splatted list of patterns" do
+      patterns = [/\Aauth\./, "session.created"]
+
+      config.subscribe_to(*patterns)
+
+      expect(config.subscriptions).to eq(patterns)
+    end
+
+    it "raises ArgumentError when given no pattern" do
+      expect { config.subscribe_to }.to raise_error(ArgumentError, /at least one pattern/)
+      expect(config.subscriptions).to be_empty
+    end
   end
 
   describe "#subscriptions" do

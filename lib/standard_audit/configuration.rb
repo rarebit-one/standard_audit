@@ -342,8 +342,14 @@ module StandardAudit
       hook
     end
 
-    def subscribe_to(pattern)
-      @subscriptions << pattern
+    # Adds one or more patterns (String, glob or Regexp) to audit:
+    #
+    #   config.subscribe_to "myapp.*"
+    #   config.subscribe_to "auth.*", /\Abilling\./
+    def subscribe_to(*patterns)
+      raise ArgumentError, "subscribe_to needs at least one pattern" if patterns.empty?
+
+      @subscriptions.concat(patterns)
     end
 
     def subscriptions

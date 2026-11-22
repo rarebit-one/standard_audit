@@ -572,9 +572,9 @@ hooks) as well as data, and a per-example reset would otherwise drop it.
 StandardAudit.configure(baseline: true) do |config|
   # -- Subscriptions --
   # Subscribe to ActiveSupport::Notifications patterns.
-  # Supports wildcards.
+  # Supports wildcards and Regexps; one call may take several patterns.
   config.subscribe_to "myapp.*"
-  config.subscribe_to "auth.*"
+  config.subscribe_to "auth.*", /\Abilling\./
 
   # -- Extractors --
   # How to pull actor/target/scope from notification payloads.
@@ -986,7 +986,7 @@ that contributes:
 |------|------|--------|
 | check | `audit_retention` | `StandardAudit::Checks::Retention`, non-critical. Takes over standard_health's deprecated built-in entry of the same name, so it registers once. |
 | check | `audit_schema` | `StandardAudit::Checks::Schema`, non-critical. |
-| env var | `STANDARD_AUDIT_RETENTION_DAYS` | Recommended, in the `standard_audit` group of the env audit: a positive integer of days, or `indefinite`. |
+| env var | `STANDARD_AUDIT_RETENTION_DAYS` | Recommended on production, in the `standard_audit` group of the env audit: a positive integer of days, or `indefinite`. An app that sets `config.retention_days` in code can ignore the row. |
 
 Contributed checks join the set `register_default_checks` registers. Opt out or
 override by name: `c.register_default_checks audit_schema: false` or

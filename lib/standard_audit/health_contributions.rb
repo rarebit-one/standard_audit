@@ -13,11 +13,11 @@ ActiveSupport.on_load(:standard_health) do |health|
   health.contribute_check :audit_schema, "StandardAudit::Checks::Schema", critical: false
 
   health.contribute_env_vars "standard_audit" do
-    recommended :STANDARD_AUDIT_RETENTION_DAYS,
+    recommended :STANDARD_AUDIT_RETENTION_DAYS, in: %w[production],
       description: "Days to keep audit_logs rows before StandardAudit::CleanupJob deletes them: a positive " \
                    "integer, or `indefinite` to keep them forever as a deliberate decision. Unset keeps them " \
-                   "forever undecided, which the audit_retention check warns about on production. " \
-                   "`config.retention_days` in the initializer overrides it.",
-      consumed_by: "StandardAudit::Configuration.retention_days_from_env"
+                   "forever undecided, which the audit_retention check warns about on production. Read by " \
+                   "StandardAudit::Configuration.retention_days_from_env. An app that sets " \
+                   "`config.retention_days` in its initializer overrides it and can ignore this row."
   end
 end

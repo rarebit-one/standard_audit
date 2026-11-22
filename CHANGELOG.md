@@ -13,11 +13,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `:standard_health` load hook: `audit_retention`
   (`StandardAudit::Checks::Retention`) and `audit_schema`
   (`StandardAudit::Checks::Schema`), both non-critical. It also declares
-  `STANDARD_AUDIT_RETENTION_DAYS` (recommended) in a `standard_audit` env-audit
-  group. Apps on `register_default_checks` get them with no initializer line,
-  and `audit_retention` takes over standard_health's deprecated built-in entry
-  of the same name, so it registers once. There is still no dependency on
+  `STANDARD_AUDIT_RETENTION_DAYS` (recommended on production, where the
+  retention advisory fires) in a `standard_audit` env-audit group; an app that
+  sets `config.retention_days` in code can ignore that row. Apps on
+  `register_default_checks` get them with no initializer line, and
+  `audit_retention` takes over standard_health's deprecated built-in entry of
+  the same name, so it registers once. There is still no dependency on
   standard_health; without it the hook never runs.
+- **`config.subscribe_to` takes several patterns in one call**
+  (`config.subscribe_to "auth.*", /\Abilling\./`, or a splatted list,
+  `config.subscribe_to(*patterns)`). The one-pattern form works as before; a
+  call with no pattern raises `ArgumentError`.
 
 ### Changed
 - **`config.audit_catalogue` defaults to the host's `AuditCatalogue::ACTIONS`**

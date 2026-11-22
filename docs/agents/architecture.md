@@ -220,7 +220,8 @@ tenant/organisation models so you can fetch all activity within a scope.
 
 ### Subscribing to gem events
 
-`config.subscribe_to(pattern)` accepts a string, glob, or `Regexp`. Each
+`config.subscribe_to(*patterns)` accepts one or more strings, globs or
+`Regexp`s (at least one; with none it raises `ArgumentError`). Each
 event-publishing gem documents its own event namespace; the host app
 subscribes to whatever patterns it wants audited:
 
