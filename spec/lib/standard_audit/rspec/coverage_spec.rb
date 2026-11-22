@@ -90,7 +90,7 @@ RSpec.describe StandardAudit::RSpec::Coverage do
 
       expect(report.uncovered).to eq(["order.refunded"])
     ensure
-      StandardAudit.config.audit_catalogue = nil
+      StandardAudit.reset_configuration!
     end
   end
 
@@ -99,7 +99,7 @@ RSpec.describe StandardAudit::RSpec::Coverage do
 
     before { StandardAudit.config.audit_catalogue = %w[order.created order.refunded] }
 
-    after { StandardAudit.config.audit_catalogue = nil }
+    after { StandardAudit.reset_configuration! }
 
     it_behaves_like "standard_audit catalogue coverage",
       pending: %w[order.refunded],

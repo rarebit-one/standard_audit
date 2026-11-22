@@ -393,8 +393,12 @@ StandardAudit.configure(baseline: true) do |config|
 end
 ```
 
-`nil` (the default) skips the membership check entirely, so the DSL is adoptable
-before you have a catalogue. **Membership is the only rule** — there is no
+You can usually skip that line: the default resolves `AuditCatalogue::ACTIONS`
+on each call when your app defines it, the estate convention. Without an
+`AuditCatalogue` (or one with no `ACTIONS`), the default resolves to nil, which
+skips the membership check entirely, so the DSL is adoptable before you have a
+catalogue. Set `config.audit_catalogue` to point somewhere else, or to `nil` to
+switch the check off. **Membership is the only rule** — there is no
 dot-count, case, prefix, or namespace validation, because an action may
 legitimately carry a notification-bus namespace verbatim.
 
@@ -568,9 +572,9 @@ hooks) as well as data, and a per-example reset would otherwise drop it.
 StandardAudit.configure(baseline: true) do |config|
   # -- Subscriptions --
   # Subscribe to ActiveSupport::Notifications patterns.
-  # Supports wildcards.
+  # Supports wildcards and Regexps; one call may take several patterns.
   config.subscribe_to "myapp.*"
-  config.subscribe_to "auth.*"
+  config.subscribe_to "auth.*", /\Abilling\./
 
   # -- Extractors --
   # How to pull actor/target/scope from notification payloads.
@@ -625,8 +629,9 @@ StandardAudit.configure(baseline: true) do |config|
   config.before_checksum :backfill_scope   # an AuditLog instance method
 
   # -- Operation audit contract (StandardAudit::Operation) --
-  # Your action vocabulary, as a CALLABLE so Zeitwerk can reload it. nil (the
-  # default) skips the membership check entirely.
+  # Your action vocabulary, as a CALLABLE so Zeitwerk can reload it. Defaults
+  # to AuditCatalogue::ACTIONS when your app defines it; a nil result skips the
+  # membership check entirely.
   config.audit_catalogue = -> { AuditCatalogue::ACTIONS }
 
   # Whether `audit!` verifies declarations before writing. Callable or boolean;
@@ -945,7 +950,12 @@ enabling a finite window is a deliberate decision.
 
 `StandardAudit::Checks::Retention` is a [StandardHealth](https://github.com/rarebit-one/standard_health)-compatible
 check that flags unbounded retention **on production deployments** as an
-advisory. Register it (non-critical) in `config/initializers/standard_health.rb`:
+advisory. When standard_health is loaded, the gem contributes it (non-critical)
+through standard_health's load hook, alongside `audit_schema` and the
+`STANDARD_AUDIT_RETENTION_DAYS` env declaration (see
+[StandardHealth contributions](#standardhealth-contributions)), so an app that
+calls `c.register_default_checks` gets it with no extra line. To register it by
+hand instead:
 
 ```ruby
 StandardHealth.configure do |c|
@@ -965,6 +975,24 @@ is unset or blank, `Rails.env.production?` decides. With `:indefinite` it return
 which is **still HTTP 200** — it surfaces the advisory in the readiness JSON
 without failing the probe or blocking a deploy. The check is duck-typed and has
 no hard dependency on `standard_health`.
+
+### StandardHealth contributions
+
+standard_audit never depends on standard_health. When both are in the bundle,
+it registers a `:standard_health` load hook (`lib/standard_audit/health_contributions.rb`)
+that contributes:
+
+| Kind | Name | Detail |
+|------|------|--------|
+| check | `audit_retention` | `StandardAudit::Checks::Retention`, non-critical. Takes over standard_health's deprecated built-in entry of the same name, so it registers once. |
+| check | `audit_schema` | `StandardAudit::Checks::Schema`, non-critical. |
+| env var | `STANDARD_AUDIT_RETENTION_DAYS` | Recommended on production, in the `standard_audit` group of the env audit: a positive integer of days, or `indefinite`. An app that sets `config.retention_days` in code can ignore the row. |
+
+Contributed checks join the set `register_default_checks` registers. Opt out or
+override by name: `c.register_default_checks audit_schema: false` or
+`audit_retention: { critical: true }`. An app that registered either name
+itself keeps its own registration. An env var the app's own `env_spec` declares
+wins over the gem's row.
 
 ## Chain Integrity
 
@@ -1163,8 +1191,10 @@ every write with `StandardAudit::MissingUpgradeMigration`), or `false` (skip).
 On PostgreSQL with a large table, add `disable_ddl_transaction!` and
 `algorithm: :concurrently` to the generated `add_index` calls.
 
-To surface the gap in `/health/ready` as well, register the non-critical
-`StandardAudit::Checks::Schema` next to `Checks::Retention`:
+To surface the gap in `/health/ready` as well, use the non-critical
+`StandardAudit::Checks::Schema`. `register_default_checks` picks it up through
+the [StandardHealth contributions](#standardhealth-contributions); to register
+it by hand:
 
 ```ruby
 c.register_check :audit_schema, StandardAudit::Checks::Schema, critical: false

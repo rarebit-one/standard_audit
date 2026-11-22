@@ -90,7 +90,9 @@ of which a host depended on:
 - **The catalogue is host-declared, and a callable.** The gem has no knowledge
   of any publisher gem's or app's vocabulary. A callable, not a constant,
   because eagerly referencing an autoloadable constant from an initializer
-  breaks Zeitwerk reloading. `nil` = check skipped.
+  breaks Zeitwerk reloading. The default callable resolves the conventional
+  `AuditCatalogue::ACTIONS` when the host defines it (the gem never names the
+  constant eagerly); a nil result = check skipped.
 - **Membership is the only validation.** No dot-count, case, prefix, or
   namespace rule — one host's catalogue carries notification-bus names
   verbatim, and normalising them would orphan historical rows.
@@ -218,7 +220,8 @@ tenant/organisation models so you can fetch all activity within a scope.
 
 ### Subscribing to gem events
 
-`config.subscribe_to(pattern)` accepts a string, glob, or `Regexp`. Each
+`config.subscribe_to(*patterns)` accepts one or more strings, globs or
+`Regexp`s (at least one; with none it raises `ArgumentError`). Each
 event-publishing gem documents its own event namespace; the host app
 subscribes to whatever patterns it wants audited:
 

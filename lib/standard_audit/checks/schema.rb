@@ -4,7 +4,8 @@ module StandardAudit
     # is missing an upgrade migration (see StandardAudit::SchemaCheck).
     #
     # Duck-typed like Checks::Retention: `#initialize(name:, critical:)` +
-    # `#run`, with no dependency on standard_health. Register it NON-critical:
+    # `#run`, with no dependency on standard_health. Contributed NON-critical
+    # by lib/standard_audit/health_contributions.rb; to register it by hand:
     #
     #   c.register_check :audit_schema,
     #                    StandardAudit::Checks::Schema,

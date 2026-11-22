@@ -57,9 +57,10 @@ module StandardAudit
   #   end
   #
   # A CALLABLE, because referencing an autoloadable constant eagerly from an
-  # initializer pins the first-loaded copy and breaks Zeitwerk reloading. `nil`
-  # (the default) means the catalogue check is skipped entirely, so the DSL is
-  # adoptable before an app has a catalogue.
+  # initializer pins the first-loaded copy and breaks Zeitwerk reloading. The
+  # default is that callable already, resolving `AuditCatalogue::ACTIONS` when
+  # the host defines it and nil otherwise; a nil catalogue means the check is
+  # skipped entirely, so the DSL is adoptable before an app has a catalogue.
   #
   # Membership is the ONLY rule applied to an action string. There is
   # deliberately no dot-count, case, prefix, or namespace validation: one app's

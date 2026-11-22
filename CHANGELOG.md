@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **StandardHealth contributions.** When standard_health is loaded, the gem
+  contributes its two readiness checks through standard_health's
+  `:standard_health` load hook: `audit_retention`
+  (`StandardAudit::Checks::Retention`) and `audit_schema`
+  (`StandardAudit::Checks::Schema`), both non-critical. It also declares
+  `STANDARD_AUDIT_RETENTION_DAYS` (recommended on production, where the
+  retention advisory fires) in a `standard_audit` env-audit group; an app that
+  sets `config.retention_days` in code can ignore that row. Apps on
+  `register_default_checks` get them with no initializer line, and
+  `audit_retention` takes over standard_health's deprecated built-in entry of
+  the same name, so it registers once. There is still no dependency on
+  standard_health; without it the hook never runs.
+- **`config.subscribe_to` takes several patterns in one call**
+  (`config.subscribe_to "auth.*", /\Abilling\./`, or a splatted list,
+  `config.subscribe_to(*patterns)`). The one-pattern form works as before; a
+  call with no pattern raises `ArgumentError`.
+
+### Changed
+- **`config.audit_catalogue` defaults to the host's `AuditCatalogue::ACTIONS`**
+  when the app defines it, resolved per call so Zeitwerk reloading still works.
+  An app without `AuditCatalogue` (or whose `AuditCatalogue` has no `ACTIONS`)
+  resolves to nil exactly as before, so its membership check stays skipped. An
+  app that defines `AuditCatalogue::ACTIONS` but never set `audit_catalogue`
+  now gets the membership check: in local environments `audit!` raises
+  `DeclarationError` for an action missing from it, and the meta-spec's
+  catalogue examples stop being skipped. Set `config.audit_catalogue = nil` to
+  keep the old behaviour.
+
 ## [0.15.2] - 2026-10-30
 
 ### Fixed
